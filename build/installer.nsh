@@ -5,12 +5,21 @@
   ShowUninstDetails show
 !macroend
 
+!macro customWelcomePage
+  !define MUI_PAGE_CUSTOMFUNCTION_PRE MarkStackUpgradeWelcomePre
+  !define MUI_PAGE_CUSTOMFUNCTION_LEAVE MarkStackUpgradeWelcomeLeave
+  !define MUI_WELCOMEPAGE_TITLE "MarkStack 升级安装"
+  !define MUI_WELCOMEPAGE_TEXT "安装程序检测到此电脑已安装 MarkStack。继续后会先启动旧版本卸载流程，卸载完成后再进入新版安装目录选择页面。新版安装目录会默认沿用旧目录，用户数据会保留。点击“下一步”开始升级。"
+  !insertmacro MUI_PAGE_WELCOME
+!macroend
+
 !macro customPageAfterChangeDir
   !define MUI_PAGE_HEADER_TEXT "安装"
   !define MUI_PAGE_HEADER_SUBTEXT "MarkStack 正在安装，请稍候......"
 !macroend
 
 !macro customInit
+  StrCpy $R7 "0"
   ReadRegStr $R0 HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${UNINSTALL_APP_KEY}" "DisplayVersion"
   ReadRegStr $R2 HKCU "${INSTALL_REGISTRY_KEY}" "InstallLocation"
   StrCpy $R8 HKCU
@@ -23,15 +32,34 @@
     StrCmp $R0 "" done foundExistingInstall
 
   foundExistingInstall:
+    StrCpy $R7 "1"
     StrCmp $R2 "" 0 keepOldInstallDir
     StrCpy $R2 $INSTDIR
 
   keepOldInstallDir:
-    MessageBox MB_YESNO|MB_ICONQUESTION "检测到已安装 MarkStack $R0。继续后将先进入旧版卸载进度，卸载完成后再进入新版安装；安装目录默认沿用旧目录，用户数据会保留。是否继续？" IDYES runExistingUninstaller
+    StrCpy $INSTDIR $R2
+
+  done:
+!macroend
+
+!ifndef BUILD_UNINSTALLER
+Function MarkStackUpgradeWelcomePre
+  StrCmp $R7 "1" 0 skipUpgradeWelcome
+  Return
+
+  skipUpgradeWelcome:
     Abort
+FunctionEnd
+
+Function MarkStackUpgradeWelcomeLeave
+  MessageBox MB_YESNO|MB_ICONQUESTION "确认先卸载旧版 MarkStack $R0？卸载完成后将进入新版安装目录选择页面，默认目录为：$R2" IDYES runExistingUninstaller
+  Abort
 
   runExistingUninstaller:
+    ShowWindow $HWNDPARENT 0
     Call MarkStackRunExistingUninstaller
+    ShowWindow $HWNDPARENT 5
+    BringToFront
     IfErrors existingUninstallFailed restoreOldInstallDir
 
   existingUninstallFailed:
@@ -43,9 +71,8 @@
     StrCpy $INSTDIR $R2
 
   done:
-!macroend
+FunctionEnd
 
-!ifndef BUILD_UNINSTALLER
 Function MarkStackRunExistingUninstaller
   ClearErrors
   StrCmp $R8 "HKLM" readMachineInstall readUserInstall
@@ -92,3 +119,6 @@ Function MarkStackRunExistingUninstaller
     SetErrors
 FunctionEnd
 !endif
+
+
+
