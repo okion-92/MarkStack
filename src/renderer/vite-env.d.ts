@@ -9,6 +9,16 @@ type OpenMarkdownResult =
       content: string;
     };
 
+type OpenImageResult =
+  | { canceled: true; error?: string }
+  | {
+      canceled: false;
+      filePath: string;
+      fileName: string;
+      mimeType: string;
+      dataUrl: string;
+    };
+
 type SaveMarkdownResult =
   | { canceled: true; error?: string; filePath?: string }
   | {
@@ -21,6 +31,7 @@ interface Window {
   markstack: {
     openMarkdownFile: () => Promise<OpenMarkdownResult>;
     openMarkdownFileByPath: (filePath: string) => Promise<OpenMarkdownResult>;
+    openImageFile: () => Promise<OpenImageResult>;
     saveMarkdownFile: (payload: {
       filePath?: string;
       content: string;
@@ -28,4 +39,3 @@ interface Window {
     openExternal: (url: string) => Promise<void>;
   };
 }
-

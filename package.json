@@ -1,6 +1,6 @@
 {
   "name": "markstack-desktop",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "MarkStack desktop Markdown editor and previewer.",
   "author": "MarkStack",
   "license": "MIT",
@@ -66,10 +66,3 @@
     }
   }
 }
-
-
-
-
-
-
-
