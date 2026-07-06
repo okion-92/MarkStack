@@ -156,6 +156,59 @@ function ensureUrlProtocol(value: string) {
   return `https://${trimmed}`;
 }
 
+type InlineHtmlFormat = {
+  text: string;
+  selectionStart: number;
+  selectionEnd: number;
+};
+
+function buildInlineHtmlFormat(
+  selected: string,
+  fallback: string,
+  htmlPrefix: string,
+  htmlSuffix: string,
+): InlineHtmlFormat {
+  let inner = selected || fallback;
+  let leading = '';
+  let trailing = '';
+  const wrappers: Array<[string, string]> = [
+    ['**', '**'],
+    ['~~', '~~'],
+    ['*', '*'],
+    ['_', '_'],
+  ];
+
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const [prefix, suffix] of wrappers) {
+      if (inner.length > prefix.length + suffix.length && inner.startsWith(prefix) && inner.endsWith(suffix)) {
+        leading += prefix;
+        trailing = `${suffix}${trailing}`;
+        inner = inner.slice(prefix.length, -suffix.length);
+        changed = true;
+        break;
+      }
+    }
+  }
+
+  if (inner.length > 2 && inner.startsWith('`') && inner.endsWith('`')) {
+    inner = inner.slice(1, -1);
+    const codePrefix = `${leading}<code>${htmlPrefix}`;
+    return {
+      text: `${codePrefix}${inner}${htmlSuffix}</code>${trailing}`,
+      selectionStart: codePrefix.length,
+      selectionEnd: codePrefix.length + inner.length,
+    };
+  }
+
+  const prefix = `${leading}${htmlPrefix}`;
+  return {
+    text: `${prefix}${inner}${htmlSuffix}${trailing}`,
+    selectionStart: prefix.length,
+    selectionEnd: prefix.length + inner.length,
+  };
+}
 function clampRange(range: EditorRange, length: number): EditorRange {
   const from = Math.max(0, Math.min(range.from, length));
   const to = Math.max(from, Math.min(range.to, length));
@@ -523,12 +576,9 @@ export default function App() {
       return;
     }
     applySelectedText((selected) => {
-      const text = selected || '文字';
-      const prefix = `<span style="font-size: ${size};">`;
+      const formatted = buildInlineHtmlFormat(selected, '文字', `<span style="font-size: ${size};">`, '</span>');
       return {
-        text: `${prefix}${text}</span>`,
-        selectionStart: prefix.length,
-        selectionEnd: prefix.length + text.length,
+        ...formatted,
         status: '已应用字号',
       };
     });
@@ -539,12 +589,9 @@ export default function App() {
       return;
     }
     applySelectedText((selected) => {
-      const text = selected || '文字';
-      const prefix = `<span style="font-family: ${fontFamily};">`;
+      const formatted = buildInlineHtmlFormat(selected, '文字', `<span style="font-family: ${fontFamily};">`, '</span>');
       return {
-        text: `${prefix}${text}</span>`,
-        selectionStart: prefix.length,
-        selectionEnd: prefix.length + text.length,
+        ...formatted,
         status: '已应用字体',
       };
     });
@@ -552,12 +599,9 @@ export default function App() {
 
   function applyFontColor(color: string) {
     applySelectedText((selected) => {
-      const text = selected || '文字';
-      const prefix = `<span style="color: ${color};">`;
+      const formatted = buildInlineHtmlFormat(selected, '文字', `<span style="color: ${color};">`, '</span>');
       return {
-        text: `${prefix}${text}</span>`,
-        selectionStart: prefix.length,
-        selectionEnd: prefix.length + text.length,
+        ...formatted,
         status: '已应用文字颜色',
       };
     });
@@ -566,7 +610,7 @@ export default function App() {
   function applyAlignment(align: 'left' | 'center' | 'right') {
     applyLineFormat((value) => {
       const text = value.trim() || '段落内容';
-      return `<p style="text-align: ${align};">\n${text}\n</p>`;
+      return `<p style="text-align: ${align};">${markdownRenderer.renderInline(text)}</p>`;
     }, align === 'left' ? '左对齐' : align === 'center' ? '居中对齐' : '右对齐');
   }
 
@@ -917,6 +961,7 @@ export default function App() {
     </div>
   );
 }
+
 
 
 

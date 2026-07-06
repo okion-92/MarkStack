@@ -129,7 +129,7 @@ Example output:
 示例输出：
 
 ```text
-release/MarkStack-0.1.7-Setup.exe
+release/MarkStack-0.1.9-Setup.exe
 ```
 
 The `release/`, `dist/`, `dist-electron/`, and `node_modules/` directories are intentionally ignored by Git.
@@ -415,3 +415,4 @@ https://github.com/okion-92/MarkStack/compare/main...dev?expand=1
 - 构建产物不会提交到 Git。
 - Keep new development on `dev` and use Pull Requests to merge into `main`.
 - 后续开发保持在 `dev`，通过 Pull Request 合并到 `main`。
+

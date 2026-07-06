@@ -316,65 +316,59 @@ button:hover {
   gap: 8px;
   align-items: center;
   overflow-x: auto;
-  padding: 9px 14px;
+  padding: 8px 14px;
   border-bottom: 1px solid var(--border);
-  background: var(--surface);
+  background: color-mix(in srgb, var(--surface) 88%, var(--surface-muted));
 }
 
 .toolbar-group {
   display: inline-flex;
   flex: 0 0 auto;
   align-items: center;
-  gap: 5px;
-  padding-right: 8px;
-  border-right: 1px solid var(--border);
-}
-
-.toolbar-group:last-child {
-  border-right: 0;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--surface-muted);
 }
 
 .toolbar-group button,
-.toolbar-group button.color-swatch {
-  width: 24px;
-  height: 24px;
-  border: 1px solid var(--border-strong);
-  border-radius: 999px;
-  box-shadow: inset 0 0 0 2px var(--surface);
-}
 .color-control {
   display: grid;
-  width: 32px;
-  height: 30px;
+  width: 30px;
+  height: 28px;
   place-items: center;
-  border: 1px solid var(--border);
-  border-radius: 7px;
-  background: var(--surface);
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
   color: var(--text);
 }
 
 .toolbar-group button:hover,
 .color-control:hover {
-  border-color: var(--border-strong);
+  background: var(--surface);
+  color: var(--accent-strong);
+}
+
+.toolbar-selects {
+  gap: 6px;
 }
 
 .toolbar-selects select {
-  height: 30px;
-  min-width: 68px;
-  border: 1px solid var(--border);
-  border-radius: 7px;
-  background: var(--surface);
+  height: 28px;
+  min-width: 70px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
   color: var(--text);
   outline: 0;
 }
 
-.toolbar-group button.color-swatch {
-  width: 24px;
-  height: 24px;
-  border: 1px solid var(--border-strong);
-  border-radius: 999px;
-  box-shadow: inset 0 0 0 2px var(--surface);
+.toolbar-selects select:hover,
+.toolbar-selects select:focus {
+  background: var(--surface);
 }
+
 .color-control {
   position: relative;
   cursor: pointer;
@@ -387,6 +381,18 @@ button:hover {
   height: 100%;
   opacity: 0;
   cursor: pointer;
+}
+
+.toolbar-group button.color-swatch {
+  width: 22px;
+  height: 22px;
+  border: 1px solid color-mix(in srgb, var(--border-strong) 70%, transparent);
+  border-radius: 999px;
+  box-shadow: inset 0 0 0 2px var(--surface-muted);
+}
+
+.toolbar-group button.color-swatch:hover {
+  box-shadow: inset 0 0 0 2px var(--surface), 0 0 0 2px color-mix(in srgb, var(--accent) 30%, transparent);
 }
 .document-surface {
   display: grid;
@@ -568,6 +574,7 @@ button:hover {
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
 
 
 
