@@ -6,6 +6,16 @@ import { fileURLToPath } from 'node:url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+const imageMimeTypes: Record<string, string> = {
+  '.bmp': 'image/bmp',
+  '.gif': 'image/gif',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.png': 'image/png',
+  '.svg': 'image/svg+xml',
+  '.webp': 'image/webp',
+};
+
 type SavePayload = {
   filePath?: string;
   content: string;
@@ -21,6 +31,20 @@ async function readMarkdownFile(filePath: string) {
   };
 }
 
+async function readImageFile(filePath: string) {
+  const extension = path.extname(filePath).toLowerCase();
+  const mimeType = imageMimeTypes[extension] ?? 'application/octet-stream';
+  const buffer = await fs.readFile(filePath);
+
+  return {
+    canceled: false,
+    filePath,
+    fileName: path.basename(filePath),
+    mimeType,
+    dataUrl: `data:${mimeType};base64,${buffer.toString('base64')}`,
+  };
+}
+
 const isDev = Boolean(process.env.VITE_DEV_SERVER_URL);
 
 function isAppNavigationUrl(url: string) {
@@ -29,7 +53,6 @@ function isAppNavigationUrl(url: string) {
   }
   return url.startsWith('file://');
 }
-
 
 function createMainWindow() {
   const win = new BrowserWindow({
@@ -116,6 +139,27 @@ ipcMain.handle('file:openPath', async (_event, filePath: string) => {
   }
 });
 
+ipcMain.handle('file:openImage', async () => {
+  const result = await dialog.showOpenDialog({
+    title: '嵌入图片',
+    properties: ['openFile'],
+    filters: [
+      { name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp'] },
+      { name: 'All Files', extensions: ['*'] },
+    ],
+  });
+
+  if (result.canceled || result.filePaths.length === 0) {
+    return { canceled: true };
+  }
+
+  try {
+    return await readImageFile(result.filePaths[0]);
+  } catch {
+    return { canceled: true, error: '图片不存在或无法读取。' };
+  }
+});
+
 ipcMain.handle('file:save', async (_event, payload: SavePayload) => {
   let targetPath = payload.filePath;
 
@@ -148,6 +192,3 @@ ipcMain.handle('file:save', async (_event, payload: SavePayload) => {
 ipcMain.handle('shell:openExternal', async (_event, url: string) => {
   await shell.openExternal(url);
 });
-
-
-

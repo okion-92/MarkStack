@@ -1,18 +1,35 @@
 import CodeMirror from '@uiw/react-codemirror';
 import { markdown } from '@codemirror/lang-markdown';
-import type { EditorView } from '@codemirror/view';
+import type { EditorView, ViewUpdate } from '@codemirror/view';
 import hljs from 'highlight.js';
 import {
+  AlignCenter,
+  AlignLeft,
+  AlignRight,
+  Bold,
+  Code2,
   Columns2,
   Eye,
   FileDown,
   FilePlus2,
   FolderOpen,
+  Heading1,
+  Heading2,
+  Heading3,
+  ImagePlus,
+  Italic,
+  Link,
+  List,
+  ListOrdered,
   Moon,
   PanelLeft,
+  Palette,
+  Quote,
   Save,
   Search,
+  Strikethrough,
   Sun,
+  Type,
 } from 'lucide-react';
 import MarkdownIt from 'markdown-it';
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from 'react';
@@ -30,18 +47,36 @@ type Heading = {
   text: string;
 };
 
+type EditorInsert = {
+  text: string;
+  selectionStart?: number;
+  selectionEnd?: number;
+  status: string;
+};
+
+type EditorRange = {
+  from: number;
+  to: number;
+};
+
 const welcomeDocument = `# 欢迎使用 MarkStack
 
-这是一个本地 Markdown 编辑器 MVP。
+这是一个本地 Markdown 编辑器。
 
 ## 已支持
 
 - 打开、编辑和保存 .md 文件
 - 左右分栏实时预览
-- 标题目录提取
+- 编辑区和预览区同步滚动
 - 最近文件记录
+- 预览链接在系统浏览器打开
+- 图片以 data URI 嵌入，换目录或换电脑也能加载
+- 链接、字体和段落格式工具栏
 - 浅色和深色主题
 - 代码块高亮
+
+
+demo: 选中文本后试试顶部格式工具栏。
 
 \`\`\`ts
 const message = 'Start writing.';
@@ -109,6 +144,86 @@ function scrollToRatio(element: HTMLElement, ratio: number) {
   element.scrollTop = maxScroll > 0 ? maxScroll * ratio : 0;
 }
 
+function fileNameWithoutExtension(fileName: string) {
+  return fileName.replace(/\.[^.]+$/, '') || fileName;
+}
+
+function ensureUrlProtocol(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed || /^([a-z][a-z\d+.-]*:|#)/i.test(trimmed)) {
+    return trimmed;
+  }
+  return `https://${trimmed}`;
+}
+
+type InlineHtmlFormat = {
+  text: string;
+  selectionStart: number;
+  selectionEnd: number;
+};
+
+function buildInlineHtmlFormat(
+  selected: string,
+  fallback: string,
+  htmlPrefix: string,
+  htmlSuffix: string,
+): InlineHtmlFormat {
+  let inner = selected || fallback;
+  let leading = '';
+  let trailing = '';
+  const wrappers: Array<[string, string]> = [
+    ['**', '**'],
+    ['~~', '~~'],
+    ['*', '*'],
+    ['_', '_'],
+  ];
+
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const [prefix, suffix] of wrappers) {
+      if (inner.length > prefix.length + suffix.length && inner.startsWith(prefix) && inner.endsWith(suffix)) {
+        leading += prefix;
+        trailing = `${suffix}${trailing}`;
+        inner = inner.slice(prefix.length, -suffix.length);
+        changed = true;
+        break;
+      }
+    }
+  }
+
+  if (inner.length > 2 && inner.startsWith('`') && inner.endsWith('`')) {
+    inner = inner.slice(1, -1);
+    const codePrefix = `${leading}<code>${htmlPrefix}`;
+    return {
+      text: `${codePrefix}${inner}${htmlSuffix}</code>${trailing}`,
+      selectionStart: codePrefix.length,
+      selectionEnd: codePrefix.length + inner.length,
+    };
+  }
+
+  const prefix = `${leading}${htmlPrefix}`;
+  return {
+    text: `${prefix}${inner}${htmlSuffix}${trailing}`,
+    selectionStart: prefix.length,
+    selectionEnd: prefix.length + inner.length,
+  };
+}
+function clampRange(range: EditorRange, length: number): EditorRange {
+  const from = Math.max(0, Math.min(range.from, length));
+  const to = Math.max(from, Math.min(range.to, length));
+  return { from, to };
+}
+
+function getLineRange(value: string, range: EditorRange): EditorRange {
+  const safeRange = clampRange(range, value.length);
+  const fromBreak = value.lastIndexOf('\n', Math.max(0, safeRange.from - 1));
+  const nextBreak = value.indexOf('\n', safeRange.to);
+  return {
+    from: fromBreak === -1 ? 0 : fromBreak + 1,
+    to: nextBreak === -1 ? value.length : nextBreak,
+  };
+}
 export default function App() {
   const [content, setContent] = useState(welcomeDocument);
   const [filePath, setFilePath] = useState<string | undefined>();
@@ -120,11 +235,16 @@ export default function App() {
   const [query, setQuery] = useState('');
   const [status, setStatus] = useState('准备就绪');
   const previewPaneRef = useRef<HTMLElement | null>(null);
+  const editorViewRef = useRef<EditorView | null>(null);
   const editorScrollRef = useRef<HTMLElement | null>(null);
   const editorCleanupRef = useRef<(() => void) | null>(null);
   const syncSourceRef = useRef<'editor' | 'preview' | null>(null);
   const syncResetTimerRef = useRef<number | null>(null);
   const modeRef = useRef<ViewMode>(mode);
+  const contentRef = useRef(content);
+  const editorSelectionRef = useRef<EditorRange>({ from: 0, to: 0 });
+  const toolbarChangeRef = useRef(false);
+  const toolbarStatusRef = useRef<{ message: string; until: number } | null>(null);
 
   const headings = useMemo(() => extractHeadings(content), [content]);
 
@@ -200,6 +320,7 @@ export default function App() {
   const handleEditorCreated = useCallback(
     (view: EditorView) => {
       editorCleanupRef.current?.();
+      editorViewRef.current = view;
       const scrollElement = view.scrollDOM;
       editorScrollRef.current = scrollElement;
       scrollElement.addEventListener('scroll', handleEditorScroll, { passive: true });
@@ -207,6 +328,9 @@ export default function App() {
         scrollElement.removeEventListener('scroll', handleEditorScroll);
         if (editorScrollRef.current === scrollElement) {
           editorScrollRef.current = null;
+        }
+        if (editorViewRef.current === view) {
+          editorViewRef.current = null;
         }
       };
     },
@@ -217,6 +341,10 @@ export default function App() {
     modeRef.current = mode;
     syncSourceRef.current = null;
   }, [mode]);
+
+  useEffect(() => {
+    contentRef.current = content;
+  }, [content]);
 
   useEffect(() => {
     return () => {
@@ -254,11 +382,236 @@ export default function App() {
   }
 
   function replaceDocument(nextContent: string, nextFilePath?: string, nextFileName = 'untitled.md') {
+    contentRef.current = nextContent;
+    editorSelectionRef.current = { from: 0, to: 0 };
     setContent(nextContent);
     setFilePath(nextFilePath);
     setFileName(nextFileName);
     setDirty(false);
     setStatus(nextFilePath ? `已打开 ${nextFileName}` : '新建文档');
+  }
+
+  function updateDocumentFromToolbar(
+    range: EditorRange,
+    insert: EditorInsert,
+    source = editorViewRef.current?.state.doc.toString() ?? contentRef.current,
+  ) {
+    const view = editorViewRef.current;
+    const safeRange = clampRange(range, source.length);
+    const nextContent = `${source.slice(0, safeRange.from)}${insert.text}${source.slice(safeRange.to)}`;
+    const selectionStart = safeRange.from + (insert.selectionStart ?? insert.text.length);
+    const selectionEnd = safeRange.from + (insert.selectionEnd ?? insert.selectionStart ?? insert.text.length);
+
+    contentRef.current = nextContent;
+    editorSelectionRef.current = { from: selectionStart, to: selectionEnd };
+    setContent(nextContent);
+    setDirty(true);
+    toolbarStatusRef.current = { message: insert.status, until: Date.now() + 1500 };
+    setStatus(insert.status);
+
+    if (view) {
+      toolbarChangeRef.current = true;
+      view.dispatch({
+        changes: { from: safeRange.from, to: safeRange.to, insert: insert.text },
+        selection: { anchor: selectionStart, head: selectionEnd },
+      });
+      view.focus();
+    } else {
+      setMode('split');
+    }
+  }
+
+  function applyEditorInsert(insert: EditorInsert) {
+    const view = editorViewRef.current;
+    const source = view?.state.doc.toString() ?? contentRef.current;
+    const rawRange = view
+      ? { from: view.state.selection.main.from, to: view.state.selection.main.to }
+      : editorSelectionRef.current;
+    updateDocumentFromToolbar(rawRange, insert, source);
+  }
+
+  function applySelectedText(formatter: (selected: string) => EditorInsert) {
+    const view = editorViewRef.current;
+    const source = view?.state.doc.toString() ?? contentRef.current;
+    const range = clampRange(
+      view ? { from: view.state.selection.main.from, to: view.state.selection.main.to } : editorSelectionRef.current,
+      source.length,
+    );
+    updateDocumentFromToolbar(range, formatter(source.slice(range.from, range.to)), source);
+  }
+
+  function applyInlineFormat(prefix: string, suffix: string, fallback: string, label: string) {
+    applySelectedText((selected) => {
+      const text = selected || fallback;
+      return {
+        text: `${prefix}${text}${suffix}`,
+        selectionStart: prefix.length,
+        selectionEnd: prefix.length + text.length,
+        status: `已应用${label}`,
+      };
+    });
+  }
+
+  function applyLineFormat(formatter: (value: string) => string, label: string) {
+    const view = editorViewRef.current;
+    const source = view?.state.doc.toString() ?? contentRef.current;
+    const rawRange = view
+      ? { from: view.state.selection.main.from, to: view.state.selection.main.to }
+      : editorSelectionRef.current;
+    const range = getLineRange(source, rawRange);
+    const selected = source.slice(range.from, range.to);
+    const next = formatter(selected);
+
+    updateDocumentFromToolbar(
+      range,
+      {
+        text: next,
+        selectionStart: 0,
+        selectionEnd: next.length,
+        status: `已应用${label}`,
+      },
+      source,
+    );
+  }
+
+  function setHeading(level: number) {
+    applyLineFormat(
+      (value) => value
+        .split('\n')
+        .map((line) => (line.trim() ? `${'#'.repeat(level)} ${line.replace(/^#{1,6}\s+/, '')}` : line))
+        .join('\n'),
+      `${level}级标题`,
+    );
+  }
+
+  function setParagraph() {
+    applyLineFormat(
+      (value) => value
+        .split('\n')
+        .map((line) => line.replace(/^#{1,6}\s+/, '').replace(/^>\s?/, '').replace(/^\s*(?:[-*+]|\d+\.)\s+/, ''))
+        .join('\n'),
+      '正文段落',
+    );
+  }
+
+  function setQuote() {
+    applyLineFormat(
+      (value) => value.split('\n').map((line) => (line ? `> ${line.replace(/^>\s?/, '')}` : '>')).join('\n'),
+      '引用段落',
+    );
+  }
+
+  function setUnorderedList() {
+    applyLineFormat(
+      (value) => value.split('\n').map((line) => (line.trim() ? `- ${line.replace(/^\s*(?:[-*+]|\d+\.)\s+/, '')}` : line)).join('\n'),
+      '无序列表',
+    );
+  }
+
+  function setOrderedList() {
+    applyLineFormat(
+      (value) => value
+        .split('\n')
+        .map((line, index) => (line.trim() ? `${index + 1}. ${line.replace(/^\s*(?:[-*+]|\d+\.)\s+/, '')}` : line))
+        .join('\n'),
+      '有序列表',
+    );
+  }
+
+  function setCodeBlock() {
+    applySelectedText((selected) => {
+      const text = selected || 'code';
+      return {
+        text: `\n\`\`\`\n${text}\n\`\`\`\n`,
+        selectionStart: 5,
+        selectionEnd: 5 + text.length,
+        status: '已插入代码块',
+      };
+    });
+  }
+
+  function insertLink() {
+    const rawUrl = window.prompt('请输入链接地址', 'https://');
+    if (rawUrl === null) {
+      return;
+    }
+
+    const url = ensureUrlProtocol(rawUrl);
+    if (!url) {
+      setStatus('链接地址为空');
+      return;
+    }
+
+    applySelectedText((selected) => {
+      const text = selected || '链接文本';
+      return {
+        text: `[${text}](${url})`,
+        selectionStart: 1,
+        selectionEnd: 1 + text.length,
+        status: '已插入链接',
+      };
+    });
+  }
+
+  async function insertEmbeddedImage() {
+    const result = await window.markstack.openImageFile();
+    if (result.canceled) {
+      if (result.error) {
+        setStatus(result.error);
+      }
+      return;
+    }
+
+    const alt = fileNameWithoutExtension(result.fileName);
+    applyEditorInsert({
+      text: `\n![${alt}](${result.dataUrl})\n`,
+      selectionStart: 3,
+      selectionEnd: 3 + alt.length,
+      status: `已嵌入图片 ${result.fileName}`,
+    });
+  }
+
+  function applyFontSize(size: string) {
+    if (!size) {
+      return;
+    }
+    applySelectedText((selected) => {
+      const formatted = buildInlineHtmlFormat(selected, '文字', `<span style="font-size: ${size};">`, '</span>');
+      return {
+        ...formatted,
+        status: '已应用字号',
+      };
+    });
+  }
+
+  function applyFontFamily(fontFamily: string) {
+    if (!fontFamily) {
+      return;
+    }
+    applySelectedText((selected) => {
+      const formatted = buildInlineHtmlFormat(selected, '文字', `<span style="font-family: ${fontFamily};">`, '</span>');
+      return {
+        ...formatted,
+        status: '已应用字体',
+      };
+    });
+  }
+
+  function applyFontColor(color: string) {
+    applySelectedText((selected) => {
+      const formatted = buildInlineHtmlFormat(selected, '文字', `<span style="color: ${color};">`, '</span>');
+      return {
+        ...formatted,
+        status: '已应用文字颜色',
+      };
+    });
+  }
+
+  function applyAlignment(align: 'left' | 'center' | 'right') {
+    applyLineFormat((value) => {
+      const text = value.trim() || '段落内容';
+      return `<p style="text-align: ${align};">${markdownRenderer.renderInline(text)}</p>`;
+    }, align === 'left' ? '左对齐' : align === 'center' ? '居中对齐' : '右对齐');
   }
 
   async function openFile() {
@@ -323,6 +676,11 @@ export default function App() {
     setStatus('正在编辑');
   }
 
+  const handleEditorUpdate = useCallback((viewUpdate: ViewUpdate) => {
+    const range = viewUpdate.state.selection.main;
+    editorSelectionRef.current = { from: range.from, to: range.to };
+  }, []);
+
   function handlePreviewClick(event: MouseEvent<HTMLElement>) {
     const target = event.target instanceof HTMLElement ? event.target : null;
     const anchor = target?.closest('a[href]') as HTMLAnchorElement | null;
@@ -353,7 +711,7 @@ export default function App() {
   }
 
   const wordCount = useMemo(() => {
-    const plain = content.replace(/[#*_>`~\-[\]()]/g, ' ').trim();
+    const plain = content.replace(/data:image\/[a-z+.-]+;base64,[a-z\d+/=]+/gi, ' ').replace(/[#*_>`~\-[\]()]/g, ' ').trim();
     return plain ? plain.split(/\s+/).length : 0;
   }, [content]);
 
@@ -481,6 +839,86 @@ export default function App() {
           </div>
         </header>
 
+        <div className="format-toolbar" aria-label="格式工具栏">
+          <div className="toolbar-group">
+            <button type="button" title="正文" onClick={setParagraph}><Type size={16} /></button>
+            <button type="button" title="一级标题" onClick={() => setHeading(1)}><Heading1 size={16} /></button>
+            <button type="button" title="二级标题" onClick={() => setHeading(2)}><Heading2 size={16} /></button>
+            <button type="button" title="三级标题" onClick={() => setHeading(3)}><Heading3 size={16} /></button>
+          </div>
+          <div className="toolbar-group">
+            <button type="button" title="粗体" onClick={() => applyInlineFormat('**', '**', '粗体文字', '粗体')}><Bold size={16} /></button>
+            <button type="button" title="斜体" onClick={() => applyInlineFormat('*', '*', '斜体文字', '斜体')}><Italic size={16} /></button>
+            <button type="button" title="删除线" onClick={() => applyInlineFormat('~~', '~~', '删除线文字', '删除线')}><Strikethrough size={16} /></button>
+            <button type="button" title="行内代码" onClick={() => applyInlineFormat('`', '`', 'code', '行内代码')}><Code2 size={16} /></button>
+          </div>
+          <div className="toolbar-group">
+            <button type="button" title="插入链接" onClick={insertLink}><Link size={16} /></button>
+            <button type="button" title="嵌入图片" onClick={() => void insertEmbeddedImage()}><ImagePlus size={16} /></button>
+          </div>
+          <div className="toolbar-group">
+            <button type="button" title="引用" onClick={setQuote}><Quote size={16} /></button>
+            <button type="button" title="无序列表" onClick={setUnorderedList}><List size={16} /></button>
+            <button type="button" title="有序列表" onClick={setOrderedList}><ListOrdered size={16} /></button>
+            <button type="button" title="代码块" onClick={setCodeBlock}><Code2 size={16} /></button>
+          </div>
+          <div className="toolbar-group">
+            <button type="button" title="左对齐" onClick={() => applyAlignment('left')}><AlignLeft size={16} /></button>
+            <button type="button" title="居中" onClick={() => applyAlignment('center')}><AlignCenter size={16} /></button>
+            <button type="button" title="右对齐" onClick={() => applyAlignment('right')}><AlignRight size={16} /></button>
+          </div>
+          <div className="toolbar-group toolbar-selects">
+            <select defaultValue="" title="字号" onChange={(event) => { applyFontSize(event.target.value); event.currentTarget.value = ''; }}>
+              <option value="" disabled>字号</option>
+              <option value="12px">12</option>
+              <option value="14px">14</option>
+              <option value="16px">16</option>
+              <option value="18px">18</option>
+              <option value="24px">24</option>
+              <option value="32px">32</option>
+            </select>
+            <select defaultValue="" title="字体" onChange={(event) => { applyFontFamily(event.target.value); event.currentTarget.value = ''; }}>
+              <option value="" disabled>字体</option>
+              <option value="Arial, sans-serif">Arial</option>
+              <option value="Georgia, serif">Georgia</option>
+              <option value="'Times New Roman', serif">Times</option>
+              <option value="'Microsoft YaHei', sans-serif">雅黑</option>
+              <option value="SimSun, serif">宋体</option>
+              <option value="Consolas, monospace">代码</option>
+            </select>
+            <label className="color-control" title="自定义文字颜色">
+              <Palette size={16} />
+              <input
+                type="color"
+                defaultValue="#287c71"
+                onInput={(event) => applyFontColor(event.currentTarget.value)}
+                onChange={(event) => applyFontColor(event.currentTarget.value)}
+              />
+            </label>
+            <button
+              type="button"
+              className="color-swatch"
+              style={{ backgroundColor: '#d92d20' }}
+              title="红色"
+              onClick={() => applyFontColor('#d92d20')}
+            />
+            <button
+              type="button"
+              className="color-swatch"
+              style={{ backgroundColor: '#287c71' }}
+              title="绿色"
+              onClick={() => applyFontColor('#287c71')}
+            />
+            <button
+              type="button"
+              className="color-swatch"
+              style={{ backgroundColor: '#1d4ed8' }}
+              title="蓝色"
+              onClick={() => applyFontColor('#1d4ed8')}
+            />
+          </div>
+        </div>
+
         <section className={`document-surface mode-${mode}`}>
           {mode !== 'preview' && (
             <div className="editor-pane">
@@ -523,6 +961,8 @@ export default function App() {
     </div>
   );
 }
+
+
 
 
 
