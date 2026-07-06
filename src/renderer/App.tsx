@@ -1,6 +1,6 @@
 import CodeMirror from '@uiw/react-codemirror';
 import { markdown } from '@codemirror/lang-markdown';
-import type { EditorView } from '@codemirror/view';
+import type { EditorView, ViewUpdate } from '@codemirror/view';
 import hljs from 'highlight.js';
 import {
   AlignCenter,
@@ -52,6 +52,11 @@ type EditorInsert = {
   selectionStart?: number;
   selectionEnd?: number;
   status: string;
+};
+
+type EditorRange = {
+  from: number;
+  to: number;
 };
 
 const welcomeDocument = `# 欢迎使用 MarkStack
@@ -151,6 +156,21 @@ function ensureUrlProtocol(value: string) {
   return `https://${trimmed}`;
 }
 
+function clampRange(range: EditorRange, length: number): EditorRange {
+  const from = Math.max(0, Math.min(range.from, length));
+  const to = Math.max(from, Math.min(range.to, length));
+  return { from, to };
+}
+
+function getLineRange(value: string, range: EditorRange): EditorRange {
+  const safeRange = clampRange(range, value.length);
+  const fromBreak = value.lastIndexOf('\n', Math.max(0, safeRange.from - 1));
+  const nextBreak = value.indexOf('\n', safeRange.to);
+  return {
+    from: fromBreak === -1 ? 0 : fromBreak + 1,
+    to: nextBreak === -1 ? value.length : nextBreak,
+  };
+}
 export default function App() {
   const [content, setContent] = useState(welcomeDocument);
   const [filePath, setFilePath] = useState<string | undefined>();
@@ -168,6 +188,10 @@ export default function App() {
   const syncSourceRef = useRef<'editor' | 'preview' | null>(null);
   const syncResetTimerRef = useRef<number | null>(null);
   const modeRef = useRef<ViewMode>(mode);
+  const contentRef = useRef(content);
+  const editorSelectionRef = useRef<EditorRange>({ from: 0, to: 0 });
+  const toolbarChangeRef = useRef(false);
+  const toolbarStatusRef = useRef<{ message: string; until: number } | null>(null);
 
   const headings = useMemo(() => extractHeadings(content), [content]);
 
@@ -266,6 +290,10 @@ export default function App() {
   }, [mode]);
 
   useEffect(() => {
+    contentRef.current = content;
+  }, [content]);
+
+  useEffect(() => {
     return () => {
       editorCleanupRef.current?.();
       if (syncResetTimerRef.current !== null) {
@@ -301,6 +329,8 @@ export default function App() {
   }
 
   function replaceDocument(nextContent: string, nextFilePath?: string, nextFileName = 'untitled.md') {
+    contentRef.current = nextContent;
+    editorSelectionRef.current = { from: 0, to: 0 };
     setContent(nextContent);
     setFilePath(nextFilePath);
     setFileName(nextFileName);
@@ -308,37 +338,53 @@ export default function App() {
     setStatus(nextFilePath ? `已打开 ${nextFileName}` : '新建文档');
   }
 
+  function updateDocumentFromToolbar(
+    range: EditorRange,
+    insert: EditorInsert,
+    source = editorViewRef.current?.state.doc.toString() ?? contentRef.current,
+  ) {
+    const view = editorViewRef.current;
+    const safeRange = clampRange(range, source.length);
+    const nextContent = `${source.slice(0, safeRange.from)}${insert.text}${source.slice(safeRange.to)}`;
+    const selectionStart = safeRange.from + (insert.selectionStart ?? insert.text.length);
+    const selectionEnd = safeRange.from + (insert.selectionEnd ?? insert.selectionStart ?? insert.text.length);
+
+    contentRef.current = nextContent;
+    editorSelectionRef.current = { from: selectionStart, to: selectionEnd };
+    setContent(nextContent);
+    setDirty(true);
+    toolbarStatusRef.current = { message: insert.status, until: Date.now() + 1500 };
+    setStatus(insert.status);
+
+    if (view) {
+      toolbarChangeRef.current = true;
+      view.dispatch({
+        changes: { from: safeRange.from, to: safeRange.to, insert: insert.text },
+        selection: { anchor: selectionStart, head: selectionEnd },
+      });
+      view.focus();
+    } else {
+      setMode('split');
+    }
+  }
+
   function applyEditorInsert(insert: EditorInsert) {
     const view = editorViewRef.current;
-    if (!view) {
-      setMode('split');
-      setStatus('请先在编辑区放置光标');
-      return;
-    }
-
-    const range = view.state.selection.main;
-    const selectionStart = range.from + (insert.selectionStart ?? insert.text.length);
-    const selectionEnd = range.from + (insert.selectionEnd ?? insert.selectionStart ?? insert.text.length);
-
-    view.dispatch({
-      changes: { from: range.from, to: range.to, insert: insert.text },
-      selection: { anchor: selectionStart, head: selectionEnd },
-    });
-    view.focus();
-    setDirty(true);
-    setStatus(insert.status);
+    const source = view?.state.doc.toString() ?? contentRef.current;
+    const rawRange = view
+      ? { from: view.state.selection.main.from, to: view.state.selection.main.to }
+      : editorSelectionRef.current;
+    updateDocumentFromToolbar(rawRange, insert, source);
   }
 
   function applySelectedText(formatter: (selected: string) => EditorInsert) {
     const view = editorViewRef.current;
-    if (!view) {
-      setMode('split');
-      setStatus('请先在编辑区放置光标');
-      return;
-    }
-
-    const range = view.state.selection.main;
-    applyEditorInsert(formatter(view.state.doc.sliceString(range.from, range.to)));
+    const source = view?.state.doc.toString() ?? contentRef.current;
+    const range = clampRange(
+      view ? { from: view.state.selection.main.from, to: view.state.selection.main.to } : editorSelectionRef.current,
+      source.length,
+    );
+    updateDocumentFromToolbar(range, formatter(source.slice(range.from, range.to)), source);
   }
 
   function applyInlineFormat(prefix: string, suffix: string, fallback: string, label: string) {
@@ -355,27 +401,24 @@ export default function App() {
 
   function applyLineFormat(formatter: (value: string) => string, label: string) {
     const view = editorViewRef.current;
-    if (!view) {
-      setMode('split');
-      setStatus('请先在编辑区放置光标');
-      return;
-    }
-
-    const range = view.state.selection.main;
-    const fromLine = view.state.doc.lineAt(range.from);
-    const toLine = view.state.doc.lineAt(range.to);
-    const from = fromLine.from;
-    const to = toLine.to;
-    const selected = view.state.doc.sliceString(from, to);
+    const source = view?.state.doc.toString() ?? contentRef.current;
+    const rawRange = view
+      ? { from: view.state.selection.main.from, to: view.state.selection.main.to }
+      : editorSelectionRef.current;
+    const range = getLineRange(source, rawRange);
+    const selected = source.slice(range.from, range.to);
     const next = formatter(selected);
 
-    view.dispatch({
-      changes: { from, to, insert: next },
-      selection: { anchor: from, head: from + next.length },
-    });
-    view.focus();
-    setDirty(true);
-    setStatus(`已应用${label}`);
+    updateDocumentFromToolbar(
+      range,
+      {
+        text: next,
+        selectionStart: 0,
+        selectionEnd: next.length,
+        status: `已应用${label}`,
+      },
+      source,
+    );
   }
 
   function setHeading(level: number) {
@@ -589,6 +632,11 @@ export default function App() {
     setStatus('正在编辑');
   }
 
+  const handleEditorUpdate = useCallback((viewUpdate: ViewUpdate) => {
+    const range = viewUpdate.state.selection.main;
+    editorSelectionRef.current = { from: range.from, to: range.to };
+  }, []);
+
   function handlePreviewClick(event: MouseEvent<HTMLElement>) {
     const target = event.target instanceof HTMLElement ? event.target : null;
     const anchor = target?.closest('a[href]') as HTMLAnchorElement | null;
@@ -794,10 +842,36 @@ export default function App() {
               <option value="SimSun, serif">宋体</option>
               <option value="Consolas, monospace">代码</option>
             </select>
-            <label className="color-control" title="文字颜色">
+            <label className="color-control" title="自定义文字颜色">
               <Palette size={16} />
-              <input type="color" defaultValue="#287c71" onChange={(event) => applyFontColor(event.target.value)} />
+              <input
+                type="color"
+                defaultValue="#287c71"
+                onInput={(event) => applyFontColor(event.currentTarget.value)}
+                onChange={(event) => applyFontColor(event.currentTarget.value)}
+              />
             </label>
+            <button
+              type="button"
+              className="color-swatch"
+              style={{ backgroundColor: '#d92d20' }}
+              title="红色"
+              onClick={() => applyFontColor('#d92d20')}
+            />
+            <button
+              type="button"
+              className="color-swatch"
+              style={{ backgroundColor: '#287c71' }}
+              title="绿色"
+              onClick={() => applyFontColor('#287c71')}
+            />
+            <button
+              type="button"
+              className="color-swatch"
+              style={{ backgroundColor: '#1d4ed8' }}
+              title="蓝色"
+              onClick={() => applyFontColor('#1d4ed8')}
+            />
           </div>
         </div>
 
@@ -843,3 +917,8 @@ export default function App() {
     </div>
   );
 }
+
+
+
+
+
