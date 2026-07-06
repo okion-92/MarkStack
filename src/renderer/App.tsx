@@ -1,0 +1,529 @@
+import CodeMirror from '@uiw/react-codemirror';
+import { markdown } from '@codemirror/lang-markdown';
+import type { EditorView } from '@codemirror/view';
+import hljs from 'highlight.js';
+import {
+  Columns2,
+  Eye,
+  FileDown,
+  FilePlus2,
+  FolderOpen,
+  Moon,
+  PanelLeft,
+  Save,
+  Search,
+  Sun,
+} from 'lucide-react';
+import MarkdownIt from 'markdown-it';
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from 'react';
+
+type ViewMode = 'split' | 'editor' | 'preview';
+
+type RecentFile = {
+  filePath: string;
+  fileName: string;
+};
+
+type Heading = {
+  id: string;
+  level: number;
+  text: string;
+};
+
+const welcomeDocument = `# 欢迎使用 MarkStack
+
+这是一个本地 Markdown 编辑器 MVP。
+
+## 已支持
+
+- 打开、编辑和保存 .md 文件
+- 左右分栏实时预览
+- 标题目录提取
+- 最近文件记录
+- 浅色和深色主题
+- 代码块高亮
+
+\`\`\`ts
+const message = 'Start writing.';
+console.log(message);
+\`\`\`
+`;
+
+const recentStorageKey = 'markstack.recentFiles';
+const themeStorageKey = 'markstack.theme';
+
+function slugify(value: string) {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s-]/gu, '')
+    .replace(/\s+/g, '-')
+    .slice(0, 80);
+}
+
+function extractHeadings(markdownText: string): Heading[] {
+  return markdownText
+    .split(/\r?\n/)
+    .map((line) => /^(#{1,4})\s+(.+)$/.exec(line))
+    .filter((match): match is RegExpExecArray => Boolean(match))
+    .map((match) => ({
+      level: match[1].length,
+      text: match[2].replace(/[#*_`]/g, '').trim(),
+      id: slugify(match[2]),
+    }));
+}
+
+function loadRecentFiles(): RecentFile[] {
+  try {
+    const raw = window.localStorage.getItem(recentStorageKey);
+    return raw ? (JSON.parse(raw) as RecentFile[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+function getInitialDarkMode() {
+  const stored = window.localStorage.getItem(themeStorageKey);
+  if (stored) {
+    return stored === 'dark';
+  }
+  return window.matchMedia('(prefers-color-scheme: dark)').matches;
+}
+
+function escapeHtml(value: string) {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
+function getScrollRatio(element: HTMLElement) {
+  const maxScroll = element.scrollHeight - element.clientHeight;
+  return maxScroll > 0 ? element.scrollTop / maxScroll : 0;
+}
+
+function scrollToRatio(element: HTMLElement, ratio: number) {
+  const maxScroll = element.scrollHeight - element.clientHeight;
+  element.scrollTop = maxScroll > 0 ? maxScroll * ratio : 0;
+}
+
+export default function App() {
+  const [content, setContent] = useState(welcomeDocument);
+  const [filePath, setFilePath] = useState<string | undefined>();
+  const [fileName, setFileName] = useState('untitled.md');
+  const [dirty, setDirty] = useState(false);
+  const [mode, setMode] = useState<ViewMode>('split');
+  const [darkMode, setDarkMode] = useState(getInitialDarkMode);
+  const [recentFiles, setRecentFiles] = useState<RecentFile[]>(loadRecentFiles);
+  const [query, setQuery] = useState('');
+  const [status, setStatus] = useState('准备就绪');
+  const previewPaneRef = useRef<HTMLElement | null>(null);
+  const editorScrollRef = useRef<HTMLElement | null>(null);
+  const editorCleanupRef = useRef<(() => void) | null>(null);
+  const syncSourceRef = useRef<'editor' | 'preview' | null>(null);
+  const syncResetTimerRef = useRef<number | null>(null);
+  const modeRef = useRef<ViewMode>(mode);
+
+  const headings = useMemo(() => extractHeadings(content), [content]);
+
+  const markdownRenderer = useMemo<MarkdownIt>(() => {
+    return new MarkdownIt({
+      html: true,
+      linkify: true,
+      typographer: true,
+      highlight(str: string, lang: string): string {
+        if (lang && hljs.getLanguage(lang)) {
+          try {
+            return `<pre><code class="hljs language-${lang}">${hljs.highlight(str, {
+              language: lang,
+              ignoreIllegals: true,
+            }).value}</code></pre>`;
+          } catch {
+            return '';
+          }
+        }
+        return `<pre><code class="hljs">${escapeHtml(str)}</code></pre>`;
+      },
+    });
+  }, []);
+
+  const renderedHtml = useMemo(() => {
+    const raw = markdownRenderer.render(content);
+    return raw.replace(/<h([1-4])>(.*?)<\/h\1>/g, (_match: string, level: string, text: string) => {
+      const plain = text.replace(/<[^>]+>/g, '');
+      return `<h${level} id="${slugify(plain)}">${text}</h${level}>`;
+    });
+  }, [content, markdownRenderer]);
+
+  const clearSyncSource = useCallback(() => {
+    if (syncResetTimerRef.current !== null) {
+      window.clearTimeout(syncResetTimerRef.current);
+    }
+    syncResetTimerRef.current = window.setTimeout(() => {
+      syncSourceRef.current = null;
+      syncResetTimerRef.current = null;
+    }, 80);
+  }, []);
+
+  const syncScrollPosition = useCallback(
+    (source: 'editor' | 'preview') => {
+      if (modeRef.current !== 'split') {
+        return;
+      }
+      if (syncSourceRef.current && syncSourceRef.current !== source) {
+        return;
+      }
+
+      const sourceElement = source === 'editor' ? editorScrollRef.current : previewPaneRef.current;
+      const targetElement = source === 'editor' ? previewPaneRef.current : editorScrollRef.current;
+      if (!sourceElement || !targetElement) {
+        return;
+      }
+
+      syncSourceRef.current = source;
+      scrollToRatio(targetElement, getScrollRatio(sourceElement));
+      clearSyncSource();
+    },
+    [clearSyncSource],
+  );
+
+  const handleEditorScroll = useCallback(() => {
+    syncScrollPosition('editor');
+  }, [syncScrollPosition]);
+
+  const handlePreviewScroll = useCallback(() => {
+    syncScrollPosition('preview');
+  }, [syncScrollPosition]);
+
+  const handleEditorCreated = useCallback(
+    (view: EditorView) => {
+      editorCleanupRef.current?.();
+      const scrollElement = view.scrollDOM;
+      editorScrollRef.current = scrollElement;
+      scrollElement.addEventListener('scroll', handleEditorScroll, { passive: true });
+      editorCleanupRef.current = () => {
+        scrollElement.removeEventListener('scroll', handleEditorScroll);
+        if (editorScrollRef.current === scrollElement) {
+          editorScrollRef.current = null;
+        }
+      };
+    },
+    [handleEditorScroll],
+  );
+
+  useEffect(() => {
+    modeRef.current = mode;
+    syncSourceRef.current = null;
+  }, [mode]);
+
+  useEffect(() => {
+    return () => {
+      editorCleanupRef.current?.();
+      if (syncResetTimerRef.current !== null) {
+        window.clearTimeout(syncResetTimerRef.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = darkMode ? 'dark' : 'light';
+    window.localStorage.setItem(themeStorageKey, darkMode ? 'dark' : 'light');
+  }, [darkMode]);
+
+  useEffect(() => {
+    const nextTitle = `${dirty ? '* ' : ''}${fileName} - MarkStack`;
+    document.title = nextTitle;
+  }, [dirty, fileName]);
+
+  function updateRecentFiles(nextFiles: RecentFile[]) {
+    setRecentFiles(nextFiles);
+    window.localStorage.setItem(recentStorageKey, JSON.stringify(nextFiles));
+  }
+
+  function rememberFile(next: RecentFile) {
+    updateRecentFiles([
+      next,
+      ...recentFiles.filter((item) => item.filePath !== next.filePath),
+    ].slice(0, 6));
+  }
+
+  function forgetRecentFile(targetPath: string) {
+    updateRecentFiles(recentFiles.filter((item) => item.filePath !== targetPath));
+  }
+
+  function replaceDocument(nextContent: string, nextFilePath?: string, nextFileName = 'untitled.md') {
+    setContent(nextContent);
+    setFilePath(nextFilePath);
+    setFileName(nextFileName);
+    setDirty(false);
+    setStatus(nextFilePath ? `已打开 ${nextFileName}` : '新建文档');
+  }
+
+  async function openFile() {
+    if (dirty && !window.confirm('当前文档尚未保存，继续打开新文件？')) {
+      return;
+    }
+
+    const result = await window.markstack.openMarkdownFile();
+    if (result.canceled) {
+      return;
+    }
+
+    replaceDocument(result.content, result.filePath, result.fileName);
+    rememberFile({ filePath: result.filePath, fileName: result.fileName });
+  }
+
+  async function openRecentFile(item: RecentFile) {
+    if (dirty && !window.confirm('当前文档尚未保存，继续打开最近文件？')) {
+      return;
+    }
+
+    const result = await window.markstack.openMarkdownFileByPath(item.filePath);
+    if (result.canceled) {
+      window.alert(result.error ?? '最近文件无法打开。');
+      forgetRecentFile(item.filePath);
+      setStatus(`无法打开 ${item.fileName}`);
+      return;
+    }
+
+    replaceDocument(result.content, result.filePath, result.fileName);
+    rememberFile({ filePath: result.filePath, fileName: result.fileName });
+  }
+
+  function newFile() {
+    if (dirty && !window.confirm('当前文档尚未保存，继续新建？')) {
+      return;
+    }
+
+    replaceDocument('# Untitled\n\n', undefined, 'untitled.md');
+  }
+
+  async function saveFile(saveAs = false) {
+    const result = await window.markstack.saveMarkdownFile({
+      filePath: saveAs ? undefined : filePath,
+      content,
+    });
+
+    if (result.canceled) {
+      return;
+    }
+
+    setFilePath(result.filePath);
+    setFileName(result.fileName);
+    setDirty(false);
+    rememberFile({ filePath: result.filePath, fileName: result.fileName });
+    setStatus(`已保存 ${result.fileName}`);
+  }
+
+  function handleContentChange(value: string) {
+    setContent(value);
+    setDirty(true);
+    setStatus('正在编辑');
+  }
+
+  function handlePreviewClick(event: MouseEvent<HTMLElement>) {
+    const target = event.target instanceof HTMLElement ? event.target : null;
+    const anchor = target?.closest('a[href]') as HTMLAnchorElement | null;
+    if (!anchor) {
+      return;
+    }
+
+    const href = anchor.getAttribute('href') ?? '';
+    if (!href || href.startsWith('#')) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+
+    try {
+      const url = new URL(href, filePath ? `file:///${filePath.replace(/\\/g, '/')}` : window.location.href);
+      if (url.protocol === 'http:' || url.protocol === 'https:' || url.protocol === 'mailto:') {
+        void window.markstack.openExternal(url.toString());
+        setStatus('已在默认浏览器打开链接');
+        return;
+      }
+    } catch {
+      // Invalid links are left untouched after preventing navigation.
+    }
+
+    setStatus('已阻止在应用窗口内打开该链接');
+  }
+
+  const wordCount = useMemo(() => {
+    const plain = content.replace(/[#*_>`~\-[\]()]/g, ' ').trim();
+    return plain ? plain.split(/\s+/).length : 0;
+  }, [content]);
+
+  const lineCount = useMemo(() => content.split(/\r?\n/).length, [content]);
+
+  return (
+    <div className="app-shell">
+      <aside className="sidebar">
+        <div className="brand">
+          <div className="brand-mark">M</div>
+          <div>
+            <div className="brand-name">MarkStack</div>
+            <div className="brand-subtitle">Markdown Workspace</div>
+          </div>
+        </div>
+
+        <div className="sidebar-actions">
+          <button type="button" onClick={newFile} title="新建文档">
+            <FilePlus2 size={17} />
+            新建
+          </button>
+          <button type="button" onClick={openFile} title="打开 Markdown 文件">
+            <FolderOpen size={17} />
+            打开
+          </button>
+          <button type="button" onClick={() => void saveFile()} title="保存当前文件">
+            <Save size={17} />
+            保存
+          </button>
+          <button type="button" onClick={() => void saveFile(true)} title="另存为">
+            <FileDown size={17} />
+            另存
+          </button>
+        </div>
+
+        <div className="search-box">
+          <Search size={16} />
+          <input
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="筛选目录"
+          />
+        </div>
+
+        <section className="panel">
+          <div className="panel-title">目录</div>
+          <div className="toc-list">
+            {headings
+              .filter((heading) => heading.text.toLowerCase().includes(query.toLowerCase()))
+              .map((heading) => (
+                <a
+                  href={`#${heading.id}`}
+                  key={`${heading.id}-${heading.text}`}
+                  style={{ paddingLeft: `${(heading.level - 1) * 10 + 10}px` }}
+                >
+                  {heading.text}
+                </a>
+              ))}
+            {headings.length === 0 && <div className="empty-state">暂无标题</div>}
+          </div>
+        </section>
+
+        <section className="panel">
+          <div className="panel-title">最近文件</div>
+          <div className="recent-list">
+            {recentFiles.map((item) => (
+              <button
+                type="button"
+                className="recent-item"
+                key={item.filePath}
+                title={item.filePath}
+                onClick={() => void openRecentFile(item)}
+              >
+                <span>{item.fileName}</span>
+                <small>{item.filePath}</small>
+              </button>
+            ))}
+            {recentFiles.length === 0 && <div className="empty-state">暂无记录</div>}
+          </div>
+        </section>
+      </aside>
+
+      <main className="workspace">
+        <header className="topbar">
+          <div className="file-meta">
+            <span className={dirty ? 'dirty-dot active' : 'dirty-dot'} />
+            <div>
+              <h1>{fileName}</h1>
+              <p>{filePath ?? '尚未保存到本地文件'}</p>
+            </div>
+          </div>
+
+          <div className="view-controls" aria-label="视图切换">
+            <button
+              type="button"
+              className={mode === 'editor' ? 'active' : ''}
+              onClick={() => setMode('editor')}
+              title="仅编辑"
+            >
+              <PanelLeft size={17} />
+            </button>
+            <button
+              type="button"
+              className={mode === 'split' ? 'active' : ''}
+              onClick={() => setMode('split')}
+              title="分栏"
+            >
+              <Columns2 size={17} />
+            </button>
+            <button
+              type="button"
+              className={mode === 'preview' ? 'active' : ''}
+              onClick={() => setMode('preview')}
+              title="仅预览"
+            >
+              <Eye size={17} />
+            </button>
+            <button
+              type="button"
+              onClick={() => setDarkMode((value) => !value)}
+              title={darkMode ? '切换浅色' : '切换深色'}
+            >
+              {darkMode ? <Sun size={17} /> : <Moon size={17} />}
+            </button>
+          </div>
+        </header>
+
+        <section className={`document-surface mode-${mode}`}>
+          {mode !== 'preview' && (
+            <div className="editor-pane">
+              <CodeMirror
+                value={content}
+                height="100%"
+                maxHeight="100%"
+                extensions={[markdown()]}
+                theme={darkMode ? 'dark' : 'light'}
+                basicSetup={{
+                  foldGutter: true,
+                  lineNumbers: true,
+                  highlightActiveLine: true,
+                  autocompletion: true,
+                }}
+                onChange={handleContentChange}
+                onCreateEditor={handleEditorCreated}
+              />
+            </div>
+          )}
+
+          {mode !== 'editor' && (
+            <article
+              ref={previewPaneRef}
+              className="preview-pane markdown-body"
+              onClick={handlePreviewClick}
+              onScroll={handlePreviewScroll}
+              dangerouslySetInnerHTML={{ __html: renderedHtml }}
+            />
+          )}
+        </section>
+
+        <footer className="statusbar">
+          <span>{status}</span>
+          <span>{lineCount} 行</span>
+          <span>{wordCount} 词</span>
+          <span>{dirty ? '未保存' : '已保存'}</span>
+        </footer>
+      </main>
+    </div>
+  );
+}
+
+
+
+
