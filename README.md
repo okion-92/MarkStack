@@ -43,6 +43,13 @@ The project currently focuses on the desktop EXE version. A WeChat Mini Program 
 
 ## Release Notes / 更新说明
 
+### 0.1.15
+
+- Changed upgrade cleanup to run the old uninstaller silently, avoiding a separate visible uninstall window during overwrite installation.
+- 覆盖安装时旧版本卸载改为静默执行，避免同时出现新版安装窗口和旧版卸载窗口。
+- The installer still reads the previous install location from the registry and uses it as the default target directory.
+- 安装器仍会从注册表读取旧安装目录，并默认沿用该目录作为新版安装目标。
+
 ### 0.1.14
 
 - Fixed TOC item overlap when the sidebar is short and the document contains many headings.
@@ -150,7 +157,7 @@ Example output:
 示例输出：
 
 ```text
-release/MarkStack-0.1.14-Setup.exe
+release/MarkStack-0.1.15-Setup.exe
 ```
 
 The `release/`, `dist/`, `dist-electron/`, and `node_modules/` directories are intentionally ignored by Git.

@@ -56,9 +56,7 @@ Function MarkStackUpgradeWelcomeLeave
   Abort
 
   runExistingUninstaller:
-    HideWindow
     Call MarkStackRunExistingUninstaller
-    BringToFront
     IfErrors existingUninstallFailed restoreOldInstallDir
 
   existingUninstallFailed:
@@ -106,7 +104,17 @@ Function MarkStackRunExistingUninstaller
 
   extractedPath:
     StrCmp $R4 "" missingUninstaller 0
-    ExecWait '"$R4" /KEEP_APP_DATA --updated' $R9
+    StrCpy $R6 "$PLUGINSDIR\old-uninstaller.exe"
+    CopyFiles /SILENT "$R4" "$R6"
+    IfErrors runUninstallerInPlace 0
+    ExecWait '"$R6" /S /KEEP_APP_DATA --updated _?=$R2' $R9
+    IfErrors runUninstallerInPlace checkUninstallResult
+
+  runUninstallerInPlace:
+    ExecWait '"$R4" /S /KEEP_APP_DATA --updated _?=$R2' $R9
+    IfErrors uninstallFailed checkUninstallResult
+
+  checkUninstallResult:
     IntCmp $R9 0 uninstallOk uninstallFailed uninstallFailed
 
   uninstallOk:
