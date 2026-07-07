@@ -208,11 +208,13 @@ button:hover {
 
 .toc-list a {
   display: block;
+  flex: 0 0 auto;
   padding: 7px 10px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 13px;
+  line-height: 1.35;
 }
 
 .toc-list a:hover,
@@ -222,6 +224,7 @@ button:hover {
 
 .recent-item {
   display: flex;
+  flex: 0 0 auto;
   width: 100%;
   flex-direction: column;
   align-items: stretch;
