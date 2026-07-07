@@ -32,6 +32,7 @@ import {
   Type,
 } from 'lucide-react';
 import MarkdownIt from 'markdown-it';
+import DOMPurify from 'dompurify';
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from 'react';
 
 type ViewMode = 'split' | 'editor' | 'preview';
@@ -96,16 +97,28 @@ function slugify(value: string) {
     .slice(0, 80);
 }
 
+function makeUniqueHeadingId(value: string, usedIds: Map<string, number>) {
+  const base = slugify(value) || 'section';
+  const nextCount = (usedIds.get(base) ?? 0) + 1;
+  usedIds.set(base, nextCount);
+  return nextCount === 1 ? base : `${base}-${nextCount}`;
+}
+
 function extractHeadings(markdownText: string): Heading[] {
+  const usedIds = new Map<string, number>();
+
   return markdownText
     .split(/\r?\n/)
     .map((line) => /^(#{1,4})\s+(.+)$/.exec(line))
     .filter((match): match is RegExpExecArray => Boolean(match))
-    .map((match) => ({
-      level: match[1].length,
-      text: match[2].replace(/[#*_`]/g, '').trim(),
-      id: slugify(match[2]),
-    }));
+    .map((match) => {
+      const text = match[2].replace(/[#*_`]/g, '').trim();
+      return {
+        level: match[1].length,
+        text,
+        id: makeUniqueHeadingId(text, usedIds),
+      };
+    });
 }
 
 function loadRecentFiles(): RecentFile[] {
@@ -241,6 +254,7 @@ export default function App() {
   const syncSourceRef = useRef<'editor' | 'preview' | null>(null);
   const syncResetTimerRef = useRef<number | null>(null);
   const modeRef = useRef<ViewMode>(mode);
+  const dirtyRef = useRef(dirty);
   const contentRef = useRef(content);
   const editorSelectionRef = useRef<EditorRange>({ from: 0, to: 0 });
   const toolbarChangeRef = useRef(false);
@@ -270,10 +284,17 @@ export default function App() {
   }, []);
 
   const renderedHtml = useMemo(() => {
+    const usedIds = new Map<string, number>();
     const raw = markdownRenderer.render(content);
-    return raw.replace(/<h([1-4])>(.*?)<\/h\1>/g, (_match: string, level: string, text: string) => {
+    const htmlWithHeadingIds = raw.replace(/<h([1-4])>(.*?)<\/h\1>/g, (_match: string, level: string, text: string) => {
       const plain = text.replace(/<[^>]+>/g, '');
-      return `<h${level} id="${slugify(plain)}">${text}</h${level}>`;
+      return `<h${level} id="${makeUniqueHeadingId(plain, usedIds)}">${text}</h${level}>`;
+    });
+
+    return DOMPurify.sanitize(htmlWithHeadingIds, {
+      ADD_ATTR: ['style'],
+      ADD_DATA_URI_TAGS: ['img'],
+      FORBID_TAGS: ['script', 'iframe', 'object', 'embed', 'form', 'input', 'button', 'textarea', 'select', 'meta', 'base', 'link'],
     });
   }, [content, markdownRenderer]);
 
@@ -343,8 +364,26 @@ export default function App() {
   }, [mode]);
 
   useEffect(() => {
+    dirtyRef.current = dirty;
+  }, [dirty]);
+
+  useEffect(() => {
     contentRef.current = content;
   }, [content]);
+
+  useEffect(() => {
+    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+      if (!dirtyRef.current) {
+        return;
+      }
+
+      event.preventDefault();
+      event.returnValue = '';
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, []);
 
   useEffect(() => {
     return () => {
@@ -654,25 +693,45 @@ export default function App() {
   }
 
   async function saveFile(saveAs = false) {
-    const result = await window.markstack.saveMarkdownFile({
-      filePath: saveAs ? undefined : filePath,
-      content,
-    });
+    try {
+      const result = await window.markstack.saveMarkdownFile({
+        filePath: saveAs ? undefined : filePath,
+        content,
+      });
 
-    if (result.canceled) {
-      return;
+      if (result.canceled) {
+        if (result.error) {
+          window.alert(result.error);
+          setStatus(result.error);
+        }
+        return;
+      }
+
+      setFilePath(result.filePath);
+      setFileName(result.fileName);
+      setDirty(false);
+      rememberFile({ filePath: result.filePath, fileName: result.fileName });
+      setStatus(`已保存 ${result.fileName}`);
+    } catch {
+      window.alert('保存失败，请检查文件路径或权限。');
+      setStatus('保存失败');
     }
-
-    setFilePath(result.filePath);
-    setFileName(result.fileName);
-    setDirty(false);
-    rememberFile({ filePath: result.filePath, fileName: result.fileName });
-    setStatus(`已保存 ${result.fileName}`);
   }
 
   function handleContentChange(value: string) {
+    contentRef.current = value;
     setContent(value);
     setDirty(true);
+
+    if (toolbarChangeRef.current) {
+      toolbarChangeRef.current = false;
+      const toolbarStatus = toolbarStatusRef.current;
+      if (toolbarStatus && toolbarStatus.until > Date.now()) {
+        setStatus(toolbarStatus.message);
+        return;
+      }
+    }
+
     setStatus('正在编辑');
   }
 
@@ -699,8 +758,9 @@ export default function App() {
     try {
       const url = new URL(href, filePath ? `file:///${filePath.replace(/\\/g, '/')}` : window.location.href);
       if (url.protocol === 'http:' || url.protocol === 'https:' || url.protocol === 'mailto:') {
-        void window.markstack.openExternal(url.toString());
-        setStatus('已在默认浏览器打开链接');
+        void window.markstack.openExternal(url.toString()).then((result) => {
+          setStatus(result.success ? '已在默认浏览器打开链接' : (result.error ?? '无法打开链接'));
+        });
         return;
       }
     } catch {
@@ -935,6 +995,7 @@ export default function App() {
                   autocompletion: true,
                 }}
                 onChange={handleContentChange}
+                onUpdate={handleEditorUpdate}
                 onCreateEditor={handleEditorCreated}
               />
             </div>

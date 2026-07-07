@@ -27,6 +27,10 @@ type SaveMarkdownResult =
       fileName: string;
     };
 
+type OpenExternalResult =
+  | { success: true }
+  | { success: false; error?: string };
+
 interface Window {
   markstack: {
     openMarkdownFile: () => Promise<OpenMarkdownResult>;
@@ -36,6 +40,6 @@ interface Window {
       filePath?: string;
       content: string;
     }) => Promise<SaveMarkdownResult>;
-    openExternal: (url: string) => Promise<void>;
+    openExternal: (url: string) => Promise<OpenExternalResult>;
   };
 }
