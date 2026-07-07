@@ -43,6 +43,13 @@ The project currently focuses on the desktop EXE version. A WeChat Mini Program 
 
 ## Release Notes / 更新说明
 
+### 0.1.16
+
+- Removed the extra upgrade confirmation dialog before installation.
+- 移除安装前的升级二次确认弹窗。
+- Kept the previous install directory available for the directory confirmation step by letting the built-in silent upgrade run during installation instead of before directory selection.
+- 将旧版本静默升级放回安装阶段执行，避免提前删除旧安装信息，确保目录确认页默认沿用旧安装目录。
+
 ### 0.1.15
 
 - Changed upgrade cleanup to run the old uninstaller silently, avoiding a separate visible uninstall window during overwrite installation.
@@ -157,7 +164,7 @@ Example output:
 示例输出：
 
 ```text
-release/MarkStack-0.1.15-Setup.exe
+release/MarkStack-0.1.16-Setup.exe
 ```
 
 The `release/`, `dist/`, `dist-electron/`, and `node_modules/` directories are intentionally ignored by Git.
