@@ -129,7 +129,7 @@ Example output:
 示例输出：
 
 ```text
-release/MarkStack-0.1.11-Setup.exe
+release/MarkStack-0.1.12-Setup.exe
 ```
 
 The `release/`, `dist/`, `dist-electron/`, and `node_modules/` directories are intentionally ignored by Git.

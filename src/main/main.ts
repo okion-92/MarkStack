@@ -16,12 +16,37 @@ const imageMimeTypes: Record<string, string> = {
   '.webp': 'image/webp',
 };
 
+const markdownExtensions = new Set(['.md', '.markdown', '.mdown', '.mkd', '.txt']);
+const allowedExternalProtocols = new Set(['http:', 'https:', 'mailto:']);
+const maxEmbeddedImageBytes = 10 * 1024 * 1024;
+
 type SavePayload = {
   filePath?: string;
   content: string;
 };
 
+function isSupportedMarkdownPath(filePath: string) {
+  return markdownExtensions.has(path.extname(filePath).toLowerCase());
+}
+
+function getSafeExternalUrl(url: string) {
+  if (!url || typeof url !== 'string') {
+    return null;
+  }
+
+  try {
+    const parsed = new URL(url);
+    return allowedExternalProtocols.has(parsed.protocol) ? parsed.toString() : null;
+  } catch {
+    return null;
+  }
+}
+
 async function readMarkdownFile(filePath: string) {
+  if (!isSupportedMarkdownPath(filePath)) {
+    throw new Error('仅支持打开 Markdown 或文本文件。');
+  }
+
   const content = await fs.readFile(filePath, 'utf8');
   return {
     canceled: false,
@@ -33,7 +58,16 @@ async function readMarkdownFile(filePath: string) {
 
 async function readImageFile(filePath: string) {
   const extension = path.extname(filePath).toLowerCase();
-  const mimeType = imageMimeTypes[extension] ?? 'application/octet-stream';
+  const mimeType = imageMimeTypes[extension];
+  if (!mimeType) {
+    throw new Error('仅支持 png、jpg、jpeg、gif、webp、svg、bmp 图片。');
+  }
+
+  const stats = await fs.stat(filePath);
+  if (stats.size > maxEmbeddedImageBytes) {
+    throw new Error('图片超过 10MB，建议压缩后再嵌入。');
+  }
+
   const buffer = await fs.readFile(filePath);
 
   return {
@@ -67,13 +101,16 @@ function createMainWindow() {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false,
+      sandbox: true,
     },
   });
 
   win.webContents.setWindowOpenHandler(({ url }) => {
     if (!isAppNavigationUrl(url)) {
-      void shell.openExternal(url);
+      const safeUrl = getSafeExternalUrl(url);
+      if (safeUrl) {
+        void shell.openExternal(safeUrl);
+      }
     }
     return { action: 'deny' };
   });
@@ -81,7 +118,10 @@ function createMainWindow() {
   win.webContents.on('will-navigate', (event, url) => {
     if (!isAppNavigationUrl(url)) {
       event.preventDefault();
-      void shell.openExternal(url);
+      const safeUrl = getSafeExternalUrl(url);
+      if (safeUrl) {
+        void shell.openExternal(safeUrl);
+      }
     }
   });
 
@@ -116,7 +156,6 @@ ipcMain.handle('file:open', async () => {
     filters: [
       { name: 'Markdown', extensions: ['md', 'markdown', 'mdown', 'mkd'] },
       { name: 'Text', extensions: ['txt'] },
-      { name: 'All Files', extensions: ['*'] },
     ],
   });
 
@@ -124,7 +163,11 @@ ipcMain.handle('file:open', async () => {
     return { canceled: true };
   }
 
-  return readMarkdownFile(result.filePaths[0]);
+  try {
+    return await readMarkdownFile(result.filePaths[0]);
+  } catch (error) {
+    return { canceled: true, error: error instanceof Error ? error.message : '文件不存在或无法读取。' };
+  }
 });
 
 ipcMain.handle('file:openPath', async (_event, filePath: string) => {
@@ -134,8 +177,8 @@ ipcMain.handle('file:openPath', async (_event, filePath: string) => {
 
   try {
     return await readMarkdownFile(filePath);
-  } catch {
-    return { canceled: true, filePath, error: '文件不存在或无法读取。' };
+  } catch (error) {
+    return { canceled: true, filePath, error: error instanceof Error ? error.message : '文件不存在或无法读取。' };
   }
 });
 
@@ -145,7 +188,6 @@ ipcMain.handle('file:openImage', async () => {
     properties: ['openFile'],
     filters: [
       { name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp'] },
-      { name: 'All Files', extensions: ['*'] },
     ],
   });
 
@@ -155,40 +197,62 @@ ipcMain.handle('file:openImage', async () => {
 
   try {
     return await readImageFile(result.filePaths[0]);
-  } catch {
-    return { canceled: true, error: '图片不存在或无法读取。' };
+  } catch (error) {
+    return { canceled: true, error: error instanceof Error ? error.message : '图片不存在或无法读取。' };
   }
 });
 
 ipcMain.handle('file:save', async (_event, payload: SavePayload) => {
-  let targetPath = payload.filePath;
-
-  if (!targetPath) {
-    const result = await dialog.showSaveDialog({
-      title: '保存 Markdown 文件',
-      defaultPath: 'untitled.md',
-      filters: [
-        { name: 'Markdown', extensions: ['md'] },
-        { name: 'Text', extensions: ['txt'] },
-      ],
-    });
-
-    if (result.canceled || !result.filePath) {
-      return { canceled: true };
+  try {
+    if (!payload || typeof payload.content !== 'string') {
+      return { canceled: true, error: '保存内容无效。' };
     }
 
-    targetPath = result.filePath;
+    let targetPath = payload.filePath;
+
+    if (!targetPath) {
+      const result = await dialog.showSaveDialog({
+        title: '保存 Markdown 文件',
+        defaultPath: 'untitled.md',
+        filters: [
+          { name: 'Markdown', extensions: ['md'] },
+          { name: 'Text', extensions: ['txt'] },
+        ],
+      });
+
+      if (result.canceled || !result.filePath) {
+        return { canceled: true };
+      }
+
+      targetPath = result.filePath;
+    }
+
+    if (!isSupportedMarkdownPath(targetPath)) {
+      return { canceled: true, error: '仅支持保存为 Markdown 或文本文件。' };
+    }
+
+    await fs.writeFile(targetPath, payload.content, 'utf8');
+
+    return {
+      canceled: false,
+      filePath: targetPath,
+      fileName: path.basename(targetPath),
+    };
+  } catch (error) {
+    return { canceled: true, error: error instanceof Error ? error.message : '保存失败，请检查文件路径或权限。' };
   }
-
-  await fs.writeFile(targetPath, payload.content, 'utf8');
-
-  return {
-    canceled: false,
-    filePath: targetPath,
-    fileName: path.basename(targetPath),
-  };
 });
 
 ipcMain.handle('shell:openExternal', async (_event, url: string) => {
-  await shell.openExternal(url);
+  const safeUrl = getSafeExternalUrl(url);
+  if (!safeUrl) {
+    return { success: false, error: '不支持的链接协议。' };
+  }
+
+  try {
+    await shell.openExternal(safeUrl);
+    return { success: true };
+  } catch {
+    return { success: false, error: '无法打开链接。' };
+  }
 });
