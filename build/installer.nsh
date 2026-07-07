@@ -56,9 +56,8 @@ Function MarkStackUpgradeWelcomeLeave
   Abort
 
   runExistingUninstaller:
-    ShowWindow $HWNDPARENT 0
+    HideWindow
     Call MarkStackRunExistingUninstaller
-    ShowWindow $HWNDPARENT 5
     BringToFront
     IfErrors existingUninstallFailed restoreOldInstallDir
 

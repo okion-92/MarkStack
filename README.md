@@ -41,6 +41,27 @@ The project currently focuses on the desktop EXE version. A WeChat Mini Program 
 - Upgrade flow can detect an existing installation and run the old uninstaller first
 - 升级安装时可检测旧版本，并先执行旧版本卸载流程
 
+## Release Notes / 更新说明
+
+### 0.1.14
+
+- Fixed TOC item overlap when the sidebar is short and the document contains many headings.
+- 修复窗口未全屏且目录较多时，左侧目录文字压缩重叠的问题。
+- Improved upgrade installation flow so the installer window is hidden while the old uninstaller is running.
+- 优化升级安装流程，旧版本卸载窗口运行时隐藏新版安装窗口，避免安装和卸载窗口同时占据界面。
+
+### 0.1.13
+
+- Added stable scrolling for the left sidebar TOC panel.
+- 为左侧目录面板增加稳定滚动能力。
+
+### 0.1.12
+
+- Hardened Markdown HTML preview sanitization, external link handling, file access, and embedded image validation.
+- 加固 Markdown HTML 预览清洗、外链打开、文件访问和嵌入图片校验。
+- Added unsaved-change protection and clearer save error handling.
+- 增加未保存关闭保护和更明确的保存失败提示。
+
 ## Tech Stack / 技术栈
 
 - Electron
@@ -129,7 +150,7 @@ Example output:
 示例输出：
 
 ```text
-release/MarkStack-0.1.13-Setup.exe
+release/MarkStack-0.1.14-Setup.exe
 ```
 
 The `release/`, `dist/`, `dist-electron/`, and `node_modules/` directories are intentionally ignored by Git.
