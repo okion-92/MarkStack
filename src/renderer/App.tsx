@@ -87,6 +87,7 @@ console.log(message);
 
 const recentStorageKey = 'markstack.recentFiles';
 const themeStorageKey = 'markstack.theme';
+const droppedMarkdownPattern = /\.(?:md|markdown|mdown|mkd|txt)$/i;
 
 function slugify(value: string) {
   return value
@@ -159,6 +160,18 @@ function scrollToRatio(element: HTMLElement, ratio: number) {
 
 function fileNameWithoutExtension(fileName: string) {
   return fileName.replace(/\.[^.]+$/, '') || fileName;
+}
+
+function fileNameFromPath(value: string) {
+  return value.split(/[\\/]/).pop() || value;
+}
+
+function getDroppedFilePath(file: File) {
+  return window.markstack.getPathForFile(file) || (file as File & { path?: string }).path || '';
+}
+
+function hasDraggedFiles(event: DragEvent) {
+  return Array.from(event.dataTransfer?.types ?? []).includes('Files');
 }
 
 function ensureUrlProtocol(value: string) {
@@ -403,6 +416,37 @@ export default function App() {
     const nextTitle = `${dirty ? '* ' : ''}${fileName} - MarkStack`;
     document.title = nextTitle;
   }, [dirty, fileName]);
+
+  useEffect(() => {
+    const handleDragOver = (event: DragEvent) => {
+      if (hasDraggedFiles(event)) {
+        event.preventDefault();
+      }
+    };
+
+    const handleDrop = (event: DragEvent) => {
+      if (!hasDraggedFiles(event)) {
+        return;
+      }
+
+      event.preventDefault();
+      const file = event.dataTransfer?.files[0];
+      const droppedPath = file ? getDroppedFilePath(file) : '';
+      if (!droppedPath) {
+        setStatus('无法读取拖入文件路径');
+        return;
+      }
+
+      void openDroppedFile(droppedPath);
+    };
+
+    window.addEventListener('dragover', handleDragOver);
+    window.addEventListener('drop', handleDrop);
+    return () => {
+      window.removeEventListener('dragover', handleDragOver);
+      window.removeEventListener('drop', handleDrop);
+    };
+  }, [dirty, fileName, filePath, recentFiles]);
 
   function updateRecentFiles(nextFiles: RecentFile[]) {
     setRecentFiles(nextFiles);
@@ -677,6 +721,34 @@ export default function App() {
       window.alert(result.error ?? '最近文件无法打开。');
       forgetRecentFile(item.filePath);
       setStatus(`无法打开 ${item.fileName}`);
+      return;
+    }
+
+    replaceDocument(result.content, result.filePath, result.fileName);
+    rememberFile({ filePath: result.filePath, fileName: result.fileName });
+  }
+
+  async function openDroppedFile(nextFilePath: string) {
+    const nextFileName = fileNameFromPath(nextFilePath);
+    if (!droppedMarkdownPattern.test(nextFilePath)) {
+      setStatus('仅支持拖入 Markdown 或文本文件');
+      return;
+    }
+
+    if (dirty) {
+      if (!window.confirm(`当前文档尚未保存，打开 ${nextFileName} 会替换当前内容，继续？`)) {
+        return;
+      }
+    } else if (filePath && filePath.toLowerCase() !== nextFilePath.toLowerCase()) {
+      if (!window.confirm(`关闭 ${fileName} 并打开 ${nextFileName}？`)) {
+        return;
+      }
+    }
+
+    const result = await window.markstack.openMarkdownFileByPath(nextFilePath);
+    if (result.canceled) {
+      window.alert(result.error ?? '无法打开拖入的文件。');
+      setStatus(`无法打开 ${nextFileName}`);
       return;
     }
 
@@ -1022,9 +1094,3 @@ export default function App() {
     </div>
   );
 }
-
-
-
-
-
-
