@@ -30,6 +30,7 @@ import {
   Strikethrough,
   Sun,
   Type,
+  X,
 } from 'lucide-react';
 import MarkdownIt from 'markdown-it';
 import DOMPurify from 'dompurify';
@@ -218,8 +219,9 @@ function buildInlineHtmlFormat(
     }
   }
 
-  if (inner.length > 2 && inner.startsWith('`') && inner.endsWith('`')) {
-    inner = inner.slice(1, -1);
+  const codeMatch = /^(`+)([\s\S]*)\1$/.exec(inner);
+  if (codeMatch) {
+    inner = escapeHtml(codeMatch[2]);
     const codePrefix = `${leading}<code>${htmlPrefix}`;
     return {
       text: `${codePrefix}${inner}${htmlSuffix}</code>${trailing}`,
@@ -235,6 +237,51 @@ function buildInlineHtmlFormat(
     selectionEnd: prefix.length + inner.length,
   };
 }
+function findInlineCodeSpan(value: string, range: EditorRange) {
+  if (range.from === range.to) {
+    return null;
+  }
+
+  const pattern = /(`+)([^`\n]*?)\1/g;
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(value)) !== null) {
+    const markerLength = match[1].length;
+    const contentStart = match.index + markerLength;
+    const contentEnd = match.index + match[0].length - markerLength;
+    if (range.from >= contentStart && range.to <= contentEnd) {
+      return {
+        range: { from: match.index, to: match.index + match[0].length },
+        contentStart,
+        contentEnd,
+      };
+    }
+  }
+
+  return null;
+}
+
+function buildInlineCodeColorFormat(source: string, range: EditorRange, color: string) {
+  const codeSpan = findInlineCodeSpan(source, range);
+  if (!codeSpan) {
+    return null;
+  }
+
+  const before = escapeHtml(source.slice(codeSpan.contentStart, range.from));
+  const selected = escapeHtml(source.slice(range.from, range.to));
+  const after = escapeHtml(source.slice(range.to, codeSpan.contentEnd));
+  const prefix = `<code>${before}<span style="color: ${color};">`;
+
+  return {
+    range: codeSpan.range,
+    insert: {
+      text: `${prefix}${selected}</span>${after}</code>`,
+      selectionStart: prefix.length,
+      selectionEnd: prefix.length + selected.length,
+      status: '已应用文字颜色',
+    },
+  };
+}
+
 function clampRange(range: EditorRange, length: number): EditorRange {
   const from = Math.max(0, Math.min(range.from, length));
   const to = Math.max(from, Math.min(range.to, length));
@@ -464,12 +511,13 @@ export default function App() {
     updateRecentFiles(recentFiles.filter((item) => item.filePath !== targetPath));
   }
 
-  function replaceDocument(nextContent: string, nextFilePath?: string, nextFileName = 'untitled.md') {
+  function replaceDocument(nextContent: string, nextFilePath?: string, nextFileName = 'untitled.md', nextMode: ViewMode = 'split') {
     contentRef.current = nextContent;
     editorSelectionRef.current = { from: 0, to: 0 };
     setContent(nextContent);
     setFilePath(nextFilePath);
     setFileName(nextFileName);
+    setMode(nextMode);
     setDirty(false);
     setStatus(nextFilePath ? `已打开 ${nextFileName}` : '新建文档');
   }
@@ -681,13 +729,24 @@ export default function App() {
   }
 
   function applyFontColor(color: string) {
-    applySelectedText((selected) => {
-      const formatted = buildInlineHtmlFormat(selected, '文字', `<span style="color: ${color};">`, '</span>');
-      return {
-        ...formatted,
-        status: '已应用文字颜色',
-      };
-    });
+    const view = editorViewRef.current;
+    const source = view?.state.doc.toString() ?? contentRef.current;
+    const range = clampRange(
+      view ? { from: view.state.selection.main.from, to: view.state.selection.main.to } : editorSelectionRef.current,
+      source.length,
+    );
+    const codeFormat = buildInlineCodeColorFormat(source, range, color);
+
+    if (codeFormat) {
+      updateDocumentFromToolbar(codeFormat.range, codeFormat.insert, source);
+      return;
+    }
+
+    const formatted = buildInlineHtmlFormat(source.slice(range.from, range.to), '文字', `<span style="color: ${color};">`, '</span>');
+    updateDocumentFromToolbar(range, {
+      ...formatted,
+      status: '已应用文字颜色',
+    }, source);
   }
 
   function applyAlignment(align: 'left' | 'center' | 'right') {
@@ -707,7 +766,7 @@ export default function App() {
       return;
     }
 
-    replaceDocument(result.content, result.filePath, result.fileName);
+    replaceDocument(result.content, result.filePath, result.fileName, 'preview');
     rememberFile({ filePath: result.filePath, fileName: result.fileName });
   }
 
@@ -724,7 +783,7 @@ export default function App() {
       return;
     }
 
-    replaceDocument(result.content, result.filePath, result.fileName);
+    replaceDocument(result.content, result.filePath, result.fileName, 'preview');
     rememberFile({ filePath: result.filePath, fileName: result.fileName });
   }
 
@@ -752,8 +811,16 @@ export default function App() {
       return;
     }
 
-    replaceDocument(result.content, result.filePath, result.fileName);
+    replaceDocument(result.content, result.filePath, result.fileName, 'preview');
     rememberFile({ filePath: result.filePath, fileName: result.fileName });
+  }
+
+  function closeFile() {
+    if (dirty && !window.confirm('当前文档尚未保存，继续关闭？')) {
+      return;
+    }
+
+    replaceDocument(welcomeDocument, undefined, 'untitled.md');
   }
 
   function newFile() {
@@ -931,7 +998,14 @@ export default function App() {
           <div className="file-meta">
             <span className={dirty ? 'dirty-dot active' : 'dirty-dot'} />
             <div>
-              <h1>{fileName}</h1>
+              <div className="file-title-row">
+                <h1>{fileName}</h1>
+                {filePath && (
+                  <button type="button" className="file-close-button" onClick={closeFile} title="关闭当前文件">
+                    <X size={15} />
+                  </button>
+                )}
+              </div>
               <p>{filePath ?? '尚未保存到本地文件'}</p>
             </div>
           </div>

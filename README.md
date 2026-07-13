@@ -22,6 +22,12 @@ The project currently focuses on the desktop EXE version. A WeChat Mini Program 
 - 分栏模式下编辑区与预览区同步滚动
 - Recent file list with one-click reopening
 - 最近文件列表支持点击重新打开
+- Dragging a Markdown or text file into the window opens it as the active document after confirmation when needed
+- 拖入 Markdown 或文本文件时会按需确认，并作为当前文档打开
+- Opened files default to preview-only view, while new documents still start in split view
+- 打开文件默认进入仅预览视图，新建文档仍默认使用分栏视图
+- Opened files can be closed from the file header
+- 已打开文件可从文件标题栏关闭
 - Missing recent files are removed after a failed open attempt
 - 最近文件不存在时会提示并自动移除记录
 - Heading outline extracted from Markdown headings
@@ -32,6 +38,8 @@ The project currently focuses on the desktop EXE version. A WeChat Mini Program 
 - 支持插入链接，预览中的外部链接会用系统浏览器打开，不会覆盖 MarkStack 窗口
 - Formatting toolbar for headings, bold, italic, strikethrough, inline code, lists, quote, code block, font size, font family, color, and alignment
 - 格式工具栏支持标题、粗体、斜体、删除线、行内代码、列表、引用、代码块、字号、字体、颜色和段落对齐
+- Text color formatting also works for selected text inside inline code spans
+- 选中行内代码中的文字时，也可以应用文字颜色
 - Light and dark themes
 - 浅色和深色主题
 - Code block highlighting
@@ -42,6 +50,17 @@ The project currently focuses on the desktop EXE version. A WeChat Mini Program 
 - 升级安装时可检测旧版本，并先执行旧版本卸载流程
 
 ## Release Notes / 更新说明
+
+### Unreleased
+
+- Dragged Markdown/text files now open as active documents instead of being inserted into the current editor content.
+- 拖入 Markdown/文本文件时改为打开为当前文档，不再插入到当前编辑内容中。
+- Opened files now default to preview-only view; new documents still open in split view.
+- 打开文件默认进入仅预览视图，新建文档仍保持分栏视图。
+- Added a close button for the active opened file.
+- 为当前已打开文件增加关闭按钮。
+- Text color formatting now supports selected text inside inline code spans.
+- 文字颜色现在支持对行内代码中的选中文字生效。
 
 ### 0.1.16
 
