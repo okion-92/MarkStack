@@ -41,5 +41,6 @@ interface Window {
       content: string;
     }) => Promise<SaveMarkdownResult>;
     openExternal: (url: string) => Promise<OpenExternalResult>;
+    getPathForFile: (file: File) => string;
   };
 }
