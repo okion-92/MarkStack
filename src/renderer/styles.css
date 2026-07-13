@@ -292,10 +292,37 @@ button:hover {
   white-space: nowrap;
 }
 
+.file-title-row {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 8px;
+}
+
+.file-title-row h1 {
+  flex: 1 1 auto;
+}
+
 .file-meta h1 {
   max-width: 46vw;
   font-size: 17px;
   font-weight: 760;
+}
+
+.file-close-button {
+  display: grid;
+  width: 26px;
+  height: 26px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 7px;
+  color: var(--muted);
+}
+
+.file-close-button:hover {
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--border));
+  background: color-mix(in srgb, var(--danger) 10%, var(--surface));
+  color: var(--danger);
 }
 
 .file-meta p {
@@ -601,11 +628,3 @@ button:hover {
     grid-template-columns: minmax(0, 1fr);
   }
 }
-
-
-
-
-
-
-
-
