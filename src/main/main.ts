@@ -18,11 +18,20 @@ const imageMimeTypes: Record<string, string> = {
 
 const markdownExtensions = new Set(['.md', '.markdown', '.mdown', '.mkd', '.txt']);
 const allowedExternalProtocols = new Set(['http:', 'https:', 'mailto:']);
+const ignoredWorkspaceDirectories = new Set(['.git', 'dist', 'dist-electron', 'node_modules', 'release']);
 const maxEmbeddedImageBytes = 10 * 1024 * 1024;
+const maxWorkspaceFiles = 1000;
+const maxWorkspaceSearchFileBytes = 2 * 1024 * 1024;
+const maxWorkspaceSearchResults = 100;
 
 type SavePayload = {
   filePath?: string;
   content: string;
+};
+
+type ExportHtmlPayload = {
+  defaultPath?: string;
+  html: string;
 };
 
 function isSupportedMarkdownPath(filePath: string) {
@@ -54,6 +63,81 @@ async function readMarkdownFile(filePath: string) {
     fileName: path.basename(filePath),
     content,
   };
+}
+
+async function collectWorkspaceFiles(rootPath: string, currentPath = rootPath, files: Array<{ filePath: string; fileName: string; relativePath: string }> = []) {
+  if (files.length >= maxWorkspaceFiles) {
+    return files;
+  }
+
+  let entries;
+  try {
+    entries = await fs.readdir(currentPath, { withFileTypes: true });
+  } catch {
+    return files;
+  }
+
+  for (const entry of entries) {
+    if (files.length >= maxWorkspaceFiles) {
+      break;
+    }
+
+    const entryPath = path.join(currentPath, entry.name);
+    if (entry.isDirectory()) {
+      if (!ignoredWorkspaceDirectories.has(entry.name)) {
+        await collectWorkspaceFiles(rootPath, entryPath, files);
+      }
+    } else if (entry.isFile() && isSupportedMarkdownPath(entryPath)) {
+      files.push({
+        filePath: entryPath,
+        fileName: entry.name,
+        relativePath: path.relative(rootPath, entryPath),
+      });
+    }
+  }
+
+  return files;
+}
+
+async function searchWorkspaceFiles(rootPath: string, query: string) {
+  const normalizedQuery = query.trim().toLowerCase();
+  if (!normalizedQuery) {
+    return [];
+  }
+
+  const files = await collectWorkspaceFiles(rootPath);
+  const matches: Array<{ filePath: string; fileName: string; relativePath: string; lineNumber: number; lineText: string }> = [];
+
+  for (const file of files) {
+    if (matches.length >= maxWorkspaceSearchResults) {
+      break;
+    }
+
+    try {
+      const stats = await fs.stat(file.filePath);
+      if (stats.size > maxWorkspaceSearchFileBytes) {
+        continue;
+      }
+
+      const lines = (await fs.readFile(file.filePath, 'utf8')).split(/\r?\n/);
+      for (const [index, line] of lines.entries()) {
+        if (line.toLowerCase().includes(normalizedQuery)) {
+          matches.push({
+            ...file,
+            lineNumber: index + 1,
+            lineText: line.trim().slice(0, 220),
+          });
+        }
+        if (matches.length >= maxWorkspaceSearchResults) {
+          break;
+        }
+      }
+    } catch {
+      // Ignore unreadable files in a workspace search.
+    }
+  }
+
+  return matches;
 }
 
 async function readImageFile(filePath: string) {
@@ -182,6 +266,51 @@ ipcMain.handle('file:openPath', async (_event, filePath: string) => {
   }
 });
 
+ipcMain.handle('workspace:openFolder', async () => {
+  const result = await dialog.showOpenDialog({
+    title: '打开 Markdown 工作区',
+    properties: ['openDirectory'],
+  });
+
+  if (result.canceled || result.filePaths.length === 0) {
+    return { canceled: true };
+  }
+
+  const rootPath = result.filePaths[0];
+  const files = await collectWorkspaceFiles(rootPath);
+  files.sort((left, right) => left.relativePath.localeCompare(right.relativePath, 'zh-CN'));
+
+  return {
+    canceled: false,
+    rootPath,
+    rootName: path.basename(rootPath),
+    files,
+    truncated: files.length >= maxWorkspaceFiles,
+  };
+});
+
+ipcMain.handle('workspace:search', async (_event, payload: { rootPath?: string; query?: string }) => {
+  if (!payload?.rootPath || typeof payload.rootPath !== 'string' || typeof payload.query !== 'string') {
+    return { success: false, error: '搜索参数无效。' };
+  }
+
+  try {
+    const stats = await fs.stat(payload.rootPath);
+    if (!stats.isDirectory()) {
+      return { success: false, error: '工作区路径无效。' };
+    }
+
+    const matches = await searchWorkspaceFiles(payload.rootPath, payload.query);
+    return {
+      success: true,
+      matches,
+      truncated: matches.length >= maxWorkspaceSearchResults,
+    };
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : '搜索失败。' };
+  }
+});
+
 ipcMain.handle('file:openImage', async () => {
   const result = await dialog.showOpenDialog({
     title: '嵌入图片',
@@ -199,6 +328,29 @@ ipcMain.handle('file:openImage', async () => {
     return await readImageFile(result.filePaths[0]);
   } catch (error) {
     return { canceled: true, error: error instanceof Error ? error.message : '图片不存在或无法读取。' };
+  }
+});
+
+ipcMain.handle('file:exportHtml', async (_event, payload: ExportHtmlPayload) => {
+  try {
+    if (!payload || typeof payload.html !== 'string') {
+      return { canceled: true, error: '导出内容无效。' };
+    }
+
+    const result = await dialog.showSaveDialog({
+      title: '导出 HTML',
+      defaultPath: payload.defaultPath || 'document.html',
+      filters: [{ name: 'HTML', extensions: ['html'] }],
+    });
+
+    if (result.canceled || !result.filePath) {
+      return { canceled: true };
+    }
+
+    await fs.writeFile(result.filePath, payload.html, 'utf8');
+    return { canceled: false, filePath: result.filePath, fileName: path.basename(result.filePath) };
+  } catch (error) {
+    return { canceled: true, error: error instanceof Error ? error.message : '导出失败，请检查文件路径或权限。' };
   }
 });
 

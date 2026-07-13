@@ -22,6 +22,10 @@ The project currently focuses on the desktop EXE version. A WeChat Mini Program 
 - 分栏模式下编辑区与预览区同步滚动
 - Recent file list with one-click reopening
 - 最近文件列表支持点击重新打开
+- Open a local folder as a Markdown workspace and browse its Markdown/text files from the sidebar
+- 可将本地文件夹作为 Markdown 工作区打开，并在侧边栏浏览其中的 Markdown/文本文件
+- Search Markdown/text content across the opened workspace from the sidebar search box
+- 可通过侧边栏搜索框搜索当前工作区内 Markdown/文本文件的正文内容
 - Dragging a Markdown or text file into the window opens it as the active document after confirmation when needed
 - 拖入 Markdown 或文本文件时会按需确认，并作为当前文档打开
 - Opened files default to preview-only view, while new documents still start in split view
@@ -34,6 +38,10 @@ The project currently focuses on the desktop EXE version. A WeChat Mini Program 
 - 自动提取 Markdown 标题目录
 - Embedded images are stored as base64 data URI inside Markdown
 - 图片以 base64 data URI 嵌入 Markdown，换电脑、换目录或换服务器也不影响加载
+- Paste clipboard images directly into the document as embedded data URI images
+- 可直接粘贴剪贴板图片，并作为 data URI 图片嵌入文档
+- Export the current rendered Markdown preview as a standalone HTML file
+- 可将当前 Markdown 预览导出为独立 HTML 文件
 - Link insertion and external link protection
 - 支持插入链接，预览中的外部链接会用系统浏览器打开，不会覆盖 MarkStack 窗口
 - Formatting toolbar for headings, bold, italic, strikethrough, inline code, lists, quote, code block, font size, font family, color, and alignment
@@ -53,6 +61,14 @@ The project currently focuses on the desktop EXE version. A WeChat Mini Program 
 
 ### Unreleased
 
+- Added a local folder workspace sidebar for browsing Markdown/text files.
+- 增加本地文件夹工作区侧边栏，可浏览 Markdown/文本文件。
+- Added workspace full-text search with clickable file/line results.
+- 增加工作区全文搜索，搜索结果可点击打开对应文件。
+- Added clipboard image paste support for embedded data URI images.
+- 增加剪贴板图片粘贴能力，可直接嵌入为 data URI 图片。
+- Added HTML export for the current rendered preview.
+- 增加当前预览内容的 HTML 导出能力。
 - Dragged Markdown/text files now open as active documents instead of being inserted into the current editor content.
 - 拖入 Markdown/文本文件时改为打开为当前文档，不再插入到当前编辑内容中。
 - Opened files now default to preview-only view; new documents still open in split view.

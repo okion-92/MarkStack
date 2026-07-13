@@ -34,7 +34,7 @@ import {
 } from 'lucide-react';
 import MarkdownIt from 'markdown-it';
 import DOMPurify from 'dompurify';
-import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ClipboardEvent, type MouseEvent } from 'react';
 
 type ViewMode = 'split' | 'editor' | 'preview';
 
@@ -171,8 +171,41 @@ function getDroppedFilePath(file: File) {
   return window.markstack.getPathForFile(file) || (file as File & { path?: string }).path || '';
 }
 
+function blobToDataUrl(blob: Blob) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(blob);
+  });
+}
+
 function hasDraggedFiles(event: DragEvent) {
   return Array.from(event.dataTransfer?.types ?? []).includes('Files');
+}
+
+function buildExportHtml(title: string, body: string) {
+  return `<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>${escapeHtml(title)}</title>
+  <style>
+    body { margin: 0; padding: 32px; background: #f6f7f9; color: #1f2933; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    main { max-width: 920px; margin: 0 auto; padding: 32px; background: #fff; border: 1px solid #d7dde5; border-radius: 8px; }
+    img { max-width: 100%; }
+    pre { overflow: auto; padding: 14px; background: #101828; color: #f8fafc; border-radius: 8px; }
+    code { font-family: "Cascadia Code", Consolas, monospace; }
+    blockquote { margin-left: 0; padding-left: 16px; border-left: 4px solid #2f8f83; color: #52616f; }
+    table { border-collapse: collapse; width: 100%; }
+    th, td { border: 1px solid #d7dde5; padding: 8px; }
+  </style>
+</head>
+<body>
+  <main>${body}</main>
+</body>
+</html>`;
 }
 
 function ensureUrlProtocol(value: string) {
@@ -305,6 +338,11 @@ export default function App() {
   const [mode, setMode] = useState<ViewMode>('split');
   const [darkMode, setDarkMode] = useState(getInitialDarkMode);
   const [recentFiles, setRecentFiles] = useState<RecentFile[]>(loadRecentFiles);
+  const [workspaceRoot, setWorkspaceRoot] = useState('');
+  const [workspaceName, setWorkspaceName] = useState('');
+  const [workspaceFiles, setWorkspaceFiles] = useState<WorkspaceFileResult[]>([]);
+  const [workspaceSearchMatches, setWorkspaceSearchMatches] = useState<WorkspaceSearchMatch[]>([]);
+  const [workspaceSearchPending, setWorkspaceSearchPending] = useState(false);
   const [query, setQuery] = useState('');
   const [status, setStatus] = useState('准备就绪');
   const previewPaneRef = useRef<HTMLElement | null>(null);
@@ -463,6 +501,39 @@ export default function App() {
     const nextTitle = `${dirty ? '* ' : ''}${fileName} - MarkStack`;
     document.title = nextTitle;
   }, [dirty, fileName]);
+
+  useEffect(() => {
+    const searchText = query.trim();
+    if (!workspaceRoot || !searchText) {
+      setWorkspaceSearchMatches([]);
+      setWorkspaceSearchPending(false);
+      return;
+    }
+
+    let canceled = false;
+    setWorkspaceSearchPending(true);
+    const timer = window.setTimeout(() => {
+      void window.markstack.searchWorkspace({ rootPath: workspaceRoot, query: searchText }).then((result) => {
+        if (canceled) {
+          return;
+        }
+
+        if (result.success) {
+          setWorkspaceSearchMatches(result.matches);
+          setStatus(result.truncated ? '搜索结果超过 100 条，请缩小关键词' : `找到 ${result.matches.length} 条结果`);
+        } else {
+          setWorkspaceSearchMatches([]);
+          setStatus(result.error ?? '搜索失败');
+        }
+        setWorkspaceSearchPending(false);
+      });
+    }, 250);
+
+    return () => {
+      canceled = true;
+      window.clearTimeout(timer);
+    };
+  }, [query, workspaceRoot]);
 
   useEffect(() => {
     const handleDragOver = (event: DragEvent) => {
@@ -684,6 +755,15 @@ export default function App() {
     });
   }
 
+  function insertImageDataUrl(dataUrl: string, alt: string, status: string) {
+    applyEditorInsert({
+      text: `\n![${alt}](${dataUrl})\n`,
+      selectionStart: 3,
+      selectionEnd: 3 + alt.length,
+      status,
+    });
+  }
+
   async function insertEmbeddedImage() {
     const result = await window.markstack.openImageFile();
     if (result.canceled) {
@@ -694,12 +774,15 @@ export default function App() {
     }
 
     const alt = fileNameWithoutExtension(result.fileName);
-    applyEditorInsert({
-      text: `\n![${alt}](${result.dataUrl})\n`,
-      selectionStart: 3,
-      selectionEnd: 3 + alt.length,
-      status: `已嵌入图片 ${result.fileName}`,
-    });
+    insertImageDataUrl(result.dataUrl, alt, `已嵌入图片 ${result.fileName}`);
+  }
+
+  async function pasteClipboardImage(file: File) {
+    try {
+      insertImageDataUrl(await blobToDataUrl(file), 'pasted-image', '已嵌入剪贴板图片');
+    } catch {
+      setStatus('剪贴板图片读取失败');
+    }
   }
 
   function applyFontSize(size: string) {
@@ -787,6 +870,39 @@ export default function App() {
     rememberFile({ filePath: result.filePath, fileName: result.fileName });
   }
 
+  async function openWorkspaceFolder() {
+    const result = await window.markstack.openWorkspaceFolder();
+    if (result.canceled) {
+      if (result.error) {
+        setStatus(result.error);
+      }
+      return;
+    }
+
+    setWorkspaceRoot(result.rootPath);
+    setWorkspaceName(result.rootName);
+    setWorkspaceFiles(result.files);
+    setWorkspaceSearchMatches([]);
+    setStatus(result.truncated ? `已打开工作区 ${result.rootName}，仅显示前 1000 个文件` : `已打开工作区 ${result.rootName}`);
+  }
+
+  async function openWorkspaceFile(item: WorkspaceFileResult) {
+    if (dirty && !window.confirm('当前文档尚未保存，继续打开工作区文件？')) {
+      return;
+    }
+
+    const result = await window.markstack.openMarkdownFileByPath(item.filePath);
+    if (result.canceled) {
+      window.alert(result.error ?? '工作区文件无法打开。');
+      setWorkspaceFiles((files) => files.filter((file) => file.filePath !== item.filePath));
+      setStatus(`无法打开 ${item.fileName}`);
+      return;
+    }
+
+    replaceDocument(result.content, result.filePath, result.fileName, 'preview');
+    rememberFile({ filePath: result.filePath, fileName: result.fileName });
+  }
+
   async function openDroppedFile(nextFilePath: string) {
     const nextFileName = fileNameFromPath(nextFilePath);
     if (!droppedMarkdownPattern.test(nextFilePath)) {
@@ -857,6 +973,23 @@ export default function App() {
     }
   }
 
+  async function exportHtml() {
+    const result = await window.markstack.exportHtmlFile({
+      defaultPath: `${fileNameWithoutExtension(fileName)}.html`,
+      html: buildExportHtml(fileName, renderedHtml),
+    });
+
+    if (result.canceled) {
+      if (result.error) {
+        window.alert(result.error);
+        setStatus(result.error);
+      }
+      return;
+    }
+
+    setStatus(`已导出 ${result.fileName}`);
+  }
+
   function handleContentChange(value: string) {
     contentRef.current = value;
     setContent(value);
@@ -878,6 +1011,16 @@ export default function App() {
     const range = viewUpdate.state.selection.main;
     editorSelectionRef.current = { from: range.from, to: range.to };
   }, []);
+
+  function handlePaste(event: ClipboardEvent<HTMLDivElement>) {
+    const imageFile = Array.from(event.clipboardData.files).find((file) => file.type.startsWith('image/'));
+    if (!imageFile) {
+      return;
+    }
+
+    event.preventDefault();
+    void pasteClipboardImage(imageFile);
+  }
 
   function handlePreviewClick(event: MouseEvent<HTMLElement>) {
     const target = event.target instanceof HTMLElement ? event.target : null;
@@ -909,6 +1052,8 @@ export default function App() {
     setStatus('已阻止在应用窗口内打开该链接');
   }
 
+  const workspaceSearchQuery = query.trim();
+
   const wordCount = useMemo(() => {
     const plain = content.replace(/data:image\/[a-z+.-]+;base64,[a-z\d+/=]+/gi, ' ').replace(/[#*_>`~\-[\]()]/g, ' ').trim();
     return plain ? plain.split(/\s+/).length : 0;
@@ -917,7 +1062,7 @@ export default function App() {
   const lineCount = useMemo(() => content.split(/\r?\n/).length, [content]);
 
   return (
-    <div className="app-shell">
+    <div className="app-shell" onPaste={handlePaste}>
       <aside className="sidebar">
         <div className="brand">
           <div className="brand-mark">M</div>
@@ -936,6 +1081,10 @@ export default function App() {
             <FolderOpen size={17} />
             打开
           </button>
+          <button type="button" onClick={() => void openWorkspaceFolder()} title="打开 Markdown 工作区">
+            <FolderOpen size={17} />
+            文件夹
+          </button>
           <button type="button" onClick={() => void saveFile()} title="保存当前文件">
             <Save size={17} />
             保存
@@ -944,6 +1093,10 @@ export default function App() {
             <FileDown size={17} />
             另存
           </button>
+          <button type="button" onClick={() => void exportHtml()} title="导出 HTML">
+            <FileDown size={17} />
+            HTML
+          </button>
         </div>
 
         <div className="search-box">
@@ -951,11 +1104,52 @@ export default function App() {
           <input
             value={query}
             onChange={(event) => setQuery(event.target.value)}
-            placeholder="筛选目录"
+            placeholder="搜索目录或工作区内容"
           />
         </div>
 
-        <section className="panel">
+        <section className="panel workspace-panel">
+          <div className="panel-title">工作区{workspaceName ? ` / ${workspaceName}` : ''}</div>
+          <div className="workspace-file-list">
+            {workspaceSearchQuery && workspaceRoot ? (
+              <>
+                {workspaceSearchMatches.map((item) => (
+                  <button
+                    type="button"
+                    className={item.filePath === filePath ? 'workspace-file active' : 'workspace-file'}
+                    key={`${item.filePath}-${item.lineNumber}-${item.lineText}`}
+                    title={item.filePath}
+                    onClick={() => void openWorkspaceFile(item)}
+                  >
+                    <span>{item.fileName}</span>
+                    <small>{item.relativePath}:{item.lineNumber}</small>
+                    <small className="workspace-match-line">{item.lineText || '空行'}</small>
+                  </button>
+                ))}
+                {workspaceSearchPending && <div className="empty-state">正在搜索</div>}
+                {!workspaceSearchPending && workspaceSearchMatches.length === 0 && <div className="empty-state">未找到匹配内容</div>}
+              </>
+            ) : (
+              <>
+                {workspaceFiles.map((item) => (
+                  <button
+                    type="button"
+                    className={item.filePath === filePath ? 'workspace-file active' : 'workspace-file'}
+                    key={item.filePath}
+                    title={item.filePath}
+                    onClick={() => void openWorkspaceFile(item)}
+                  >
+                    <span>{item.fileName}</span>
+                    <small>{item.relativePath}</small>
+                  </button>
+                ))}
+                {workspaceFiles.length === 0 && <div className="empty-state">打开文件夹后显示 Markdown 文件</div>}
+              </>
+            )}
+          </div>
+        </section>
+
+        <section className="panel toc-panel">
           <div className="panel-title">目录</div>
           <div className="toc-list">
             {headings
@@ -973,7 +1167,7 @@ export default function App() {
           </div>
         </section>
 
-        <section className="panel">
+        <section className="panel recent-panel">
           <div className="panel-title">最近文件</div>
           <div className="recent-list">
             {recentFiles.map((item) => (
