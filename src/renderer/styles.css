@@ -132,6 +132,27 @@ button:hover {
   border-radius: 7px;
 }
 
+.export-settings {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.export-settings select {
+  min-width: 0;
+  height: 32px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--surface-muted);
+  color: var(--text);
+}
+
+.export-settings select:last-child {
+  grid-column: 1 / -1;
+}
+
 .search-box {
   display: flex;
   align-items: center;
@@ -162,15 +183,22 @@ button:hover {
   overflow: hidden;
 }
 
-.panel:first-of-type {
+.workspace-panel {
   flex: 1 1 0;
-  min-height: 96px;
+  min-height: 120px;
 }
 
-.panel:last-of-type {
-  flex: 0 0 min(36%, 220px);
+.toc-panel {
+  flex: 0 1 30%;
+  min-height: 96px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
+.recent-panel {
+  flex: 0 0 min(28%, 180px);
   min-height: 92px;
-  max-height: min(36%, 220px);
+  max-height: min(28%, 180px);
   padding-top: 10px;
   border-top: 1px solid var(--border);
 }
@@ -184,6 +212,7 @@ button:hover {
 }
 
 .toc-list,
+.workspace-file-list,
 .recent-list {
   display: flex;
   min-height: 0;
@@ -199,6 +228,7 @@ button:hover {
 }
 
 .toc-list a,
+.workspace-file,
 .recent-item {
   min-width: 0;
   border-radius: 6px;
@@ -218,10 +248,13 @@ button:hover {
 }
 
 .toc-list a:hover,
+.workspace-file:hover,
+.workspace-file.active,
 .recent-item:hover {
   background: var(--surface-muted);
 }
 
+.workspace-file,
 .recent-item {
   display: flex;
   flex: 0 0 auto;
@@ -235,6 +268,8 @@ button:hover {
   text-align: left;
 }
 
+.workspace-file span,
+.workspace-file small,
 .recent-item span,
 .recent-item small {
   overflow: hidden;
@@ -242,20 +277,41 @@ button:hover {
   white-space: nowrap;
 }
 
+.workspace-file span,
 .recent-item span {
   font-size: 13px;
   font-weight: 650;
 }
 
+.workspace-file small,
 .recent-item small {
   color: var(--muted);
   font-size: 11px;
+}
+
+.workspace-file .workspace-match-line {
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 500;
 }
 
 .empty-state {
   padding: 8px 10px;
   color: var(--muted);
   font-size: 13px;
+}
+
+.inline-action {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  text-align: left;
+}
+
+.inline-action:hover {
+  color: var(--accent-strong);
 }
 
 .workspace {
@@ -580,6 +636,18 @@ button:hover {
   padding: 14px;
   border-radius: 8px;
   background: #111827;
+}
+
+.markdown-body .mermaid {
+  display: flex;
+  justify-content: center;
+  background: transparent;
+  color: var(--text);
+}
+
+.markdown-body .mermaid svg {
+  max-width: 100%;
+  height: auto;
 }
 
 .markdown-body pre code {

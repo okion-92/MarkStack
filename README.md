@@ -22,18 +22,38 @@ The project currently focuses on the desktop EXE version. A WeChat Mini Program 
 - 分栏模式下编辑区与预览区同步滚动
 - Recent file list with one-click reopening
 - 最近文件列表支持点击重新打开
+- Open a local folder as a Markdown workspace and browse its Markdown/text files from the sidebar
+- 可将本地文件夹作为 Markdown 工作区打开，并在侧边栏浏览其中的 Markdown/文本文件
+- Reopen the last workspace from the sidebar after restarting the app
+- 重启应用后可从侧边栏重新打开上次工作区
+- Search Markdown/text content across the opened workspace from the sidebar search box
+- 可通过侧边栏搜索框搜索当前工作区内 Markdown/文本文件的正文内容
+- Find and replace text inside the editor using CodeMirror search
+- 可在编辑器内使用 CodeMirror 查找替换文本
 - Dragging a Markdown or text file into the window opens it as the active document after confirmation when needed
 - 拖入 Markdown 或文本文件时会按需确认，并作为当前文档打开
 - Opened files default to preview-only view, while new documents still start in split view
 - 打开文件默认进入仅预览视图，新建文档仍默认使用分栏视图
 - Opened files can be closed from the file header
 - 已打开文件可从文件标题栏关闭
+- Unsaved drafts are stored locally and can be restored after restarting the app
+- 未保存草稿会保存在本地，重启应用后可选择恢复
 - Missing recent files are removed after a failed open attempt
 - 最近文件不存在时会提示并自动移除记录
 - Heading outline extracted from Markdown headings
 - 自动提取 Markdown 标题目录
 - Embedded images are stored as base64 data URI inside Markdown
 - 图片以 base64 data URI 嵌入 Markdown，换电脑、换目录或换服务器也不影响加载
+- Paste clipboard images directly into the document as embedded data URI images
+- 可直接粘贴剪贴板图片，并作为 data URI 图片嵌入文档
+- Render Mermaid diagrams in Markdown preview from fenced `mermaid` code blocks
+- 可在 Markdown 预览中渲染 fenced `mermaid` 代码块图表
+- Export the current rendered Markdown preview as standalone HTML or PDF
+- 可将当前 Markdown 预览导出为独立 HTML 或 PDF 文件
+- Configure PDF export paper size, orientation, and margins
+- 可配置 PDF 导出的纸张、方向和页边距
+- Reveals exported HTML/PDF files in the system file explorer after export
+- 导出 HTML/PDF 后会在系统文件管理器中定位导出文件
 - Link insertion and external link protection
 - 支持插入链接，预览中的外部链接会用系统浏览器打开，不会覆盖 MarkStack 窗口
 - Formatting toolbar for headings, bold, italic, strikethrough, inline code, lists, quote, code block, font size, font family, color, and alignment
@@ -53,6 +73,26 @@ The project currently focuses on the desktop EXE version. A WeChat Mini Program 
 
 ### Unreleased
 
+- Added a local folder workspace sidebar for browsing Markdown/text files.
+- 增加本地文件夹工作区侧边栏，可浏览 Markdown/文本文件。
+- Added workspace full-text search with clickable file/line results.
+- 增加工作区全文搜索，搜索结果可点击打开对应文件。
+- Added clipboard image paste support for embedded data URI images.
+- 增加剪贴板图片粘贴能力，可直接嵌入为 data URI 图片。
+- Added HTML and PDF export for the current rendered preview.
+- 增加当前预览内容的 HTML 和 PDF 导出能力。
+- Added editor find/replace through CodeMirror search.
+- 增加基于 CodeMirror 的编辑器查找替换。
+- Added last-workspace persistence with a sidebar reopen action.
+- 增加上次工作区记忆，并可从侧边栏重新打开。
+- Added local unsaved draft restore after app restart.
+- 增加重启后的本地未保存草稿恢复。
+- Added Mermaid diagram rendering in Markdown preview.
+- 增加 Markdown 预览中的 Mermaid 图表渲染。
+- Added PDF export settings for paper size, orientation, and margins.
+- 增加 PDF 导出的纸张、方向和页边距设置。
+- Exported HTML/PDF files are revealed in the system file explorer after export.
+- 导出 HTML/PDF 后会在系统文件管理器中定位导出文件。
 - Dragged Markdown/text files now open as active documents instead of being inserted into the current editor content.
 - 拖入 Markdown/文本文件时改为打开为当前文档，不再插入到当前编辑内容中。
 - Opened files now default to preview-only view; new documents still open in split view.

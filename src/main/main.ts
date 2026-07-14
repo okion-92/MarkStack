@@ -18,11 +18,25 @@ const imageMimeTypes: Record<string, string> = {
 
 const markdownExtensions = new Set(['.md', '.markdown', '.mdown', '.mkd', '.txt']);
 const allowedExternalProtocols = new Set(['http:', 'https:', 'mailto:']);
+const ignoredWorkspaceDirectories = new Set(['.git', 'dist', 'dist-electron', 'node_modules', 'release']);
 const maxEmbeddedImageBytes = 10 * 1024 * 1024;
+const maxWorkspaceFiles = 1000;
+const maxWorkspaceSearchFileBytes = 2 * 1024 * 1024;
+const maxWorkspaceSearchResults = 100;
 
 type SavePayload = {
   filePath?: string;
   content: string;
+};
+
+type ExportDocumentPayload = {
+  defaultPath?: string;
+  html: string;
+  pdfOptions?: {
+    pageSize?: 'A4' | 'Letter';
+    landscape?: boolean;
+    marginType?: 'default' | 'none';
+  };
 };
 
 function isSupportedMarkdownPath(filePath: string) {
@@ -54,6 +68,99 @@ async function readMarkdownFile(filePath: string) {
     fileName: path.basename(filePath),
     content,
   };
+}
+
+async function collectWorkspaceFiles(rootPath: string, currentPath = rootPath, files: Array<{ filePath: string; fileName: string; relativePath: string }> = []) {
+  if (files.length >= maxWorkspaceFiles) {
+    return files;
+  }
+
+  let entries;
+  try {
+    entries = await fs.readdir(currentPath, { withFileTypes: true });
+  } catch {
+    return files;
+  }
+
+  for (const entry of entries) {
+    if (files.length >= maxWorkspaceFiles) {
+      break;
+    }
+
+    const entryPath = path.join(currentPath, entry.name);
+    if (entry.isDirectory()) {
+      if (!ignoredWorkspaceDirectories.has(entry.name)) {
+        await collectWorkspaceFiles(rootPath, entryPath, files);
+      }
+    } else if (entry.isFile() && isSupportedMarkdownPath(entryPath)) {
+      files.push({
+        filePath: entryPath,
+        fileName: entry.name,
+        relativePath: path.relative(rootPath, entryPath),
+      });
+    }
+  }
+
+  return files;
+}
+
+async function openWorkspaceRoot(rootPath: string) {
+  const stats = await fs.stat(rootPath);
+  if (!stats.isDirectory()) {
+    throw new Error('工作区路径无效。');
+  }
+
+  const files = await collectWorkspaceFiles(rootPath);
+  files.sort((left, right) => left.relativePath.localeCompare(right.relativePath, 'zh-CN'));
+
+  return {
+    canceled: false,
+    rootPath,
+    rootName: path.basename(rootPath),
+    files,
+    truncated: files.length >= maxWorkspaceFiles,
+  };
+}
+
+async function searchWorkspaceFiles(rootPath: string, query: string) {
+  const normalizedQuery = query.trim().toLowerCase();
+  if (!normalizedQuery) {
+    return [];
+  }
+
+  const files = await collectWorkspaceFiles(rootPath);
+  const matches: Array<{ filePath: string; fileName: string; relativePath: string; lineNumber: number; lineText: string }> = [];
+
+  for (const file of files) {
+    if (matches.length >= maxWorkspaceSearchResults) {
+      break;
+    }
+
+    try {
+      const stats = await fs.stat(file.filePath);
+      if (stats.size > maxWorkspaceSearchFileBytes) {
+        continue;
+      }
+
+      const lines = (await fs.readFile(file.filePath, 'utf8')).split(/\r?\n/);
+      for (const [index, line] of lines.entries()) {
+        if (line.toLowerCase().includes(normalizedQuery)) {
+          matches.push({
+            ...file,
+            lineNumber: index + 1,
+            lineText: line.trim().slice(0, 220),
+          });
+        }
+        if (matches.length >= maxWorkspaceSearchResults) {
+          break;
+        }
+      }
+    } catch {
+      // Ignore unreadable files in a workspace search.
+    }
+  }
+
+  return matches;
 }
 
 async function readImageFile(filePath: string) {
@@ -182,6 +289,57 @@ ipcMain.handle('file:openPath', async (_event, filePath: string) => {
   }
 });
 
+ipcMain.handle('workspace:openFolder', async () => {
+  const result = await dialog.showOpenDialog({
+    title: '打开 Markdown 工作区',
+    properties: ['openDirectory'],
+  });
+
+  if (result.canceled || result.filePaths.length === 0) {
+    return { canceled: true };
+  }
+
+  try {
+    return await openWorkspaceRoot(result.filePaths[0]);
+  } catch (error) {
+    return { canceled: true, error: error instanceof Error ? error.message : '工作区无法打开。' };
+  }
+});
+
+ipcMain.handle('workspace:openPath', async (_event, rootPath: string) => {
+  if (!rootPath || typeof rootPath !== 'string') {
+    return { canceled: true, error: '工作区路径无效。' };
+  }
+
+  try {
+    return await openWorkspaceRoot(rootPath);
+  } catch (error) {
+    return { canceled: true, error: error instanceof Error ? error.message : '工作区无法打开。' };
+  }
+});
+
+ipcMain.handle('workspace:search', async (_event, payload: { rootPath?: string; query?: string }) => {
+  if (!payload?.rootPath || typeof payload.rootPath !== 'string' || typeof payload.query !== 'string') {
+    return { success: false, error: '搜索参数无效。' };
+  }
+
+  try {
+    const stats = await fs.stat(payload.rootPath);
+    if (!stats.isDirectory()) {
+      return { success: false, error: '工作区路径无效。' };
+    }
+
+    const matches = await searchWorkspaceFiles(payload.rootPath, payload.query);
+    return {
+      success: true,
+      matches,
+      truncated: matches.length >= maxWorkspaceSearchResults,
+    };
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : '搜索失败。' };
+  }
+});
+
 ipcMain.handle('file:openImage', async () => {
   const result = await dialog.showOpenDialog({
     title: '嵌入图片',
@@ -199,6 +357,70 @@ ipcMain.handle('file:openImage', async () => {
     return await readImageFile(result.filePaths[0]);
   } catch (error) {
     return { canceled: true, error: error instanceof Error ? error.message : '图片不存在或无法读取。' };
+  }
+});
+
+ipcMain.handle('file:exportHtml', async (_event, payload: ExportDocumentPayload) => {
+  try {
+    if (!payload || typeof payload.html !== 'string') {
+      return { canceled: true, error: '导出内容无效。' };
+    }
+
+    const result = await dialog.showSaveDialog({
+      title: '导出 HTML',
+      defaultPath: payload.defaultPath || 'document.html',
+      filters: [{ name: 'HTML', extensions: ['html'] }],
+    });
+
+    if (result.canceled || !result.filePath) {
+      return { canceled: true };
+    }
+
+    await fs.writeFile(result.filePath, payload.html, 'utf8');
+    return { canceled: false, filePath: result.filePath, fileName: path.basename(result.filePath) };
+  } catch (error) {
+    return { canceled: true, error: error instanceof Error ? error.message : '导出失败，请检查文件路径或权限。' };
+  }
+});
+
+ipcMain.handle('file:exportPdf', async (_event, payload: ExportDocumentPayload) => {
+  if (!payload || typeof payload.html !== 'string') {
+    return { canceled: true, error: '导出内容无效。' };
+  }
+
+  const result = await dialog.showSaveDialog({
+    title: '导出 PDF',
+    defaultPath: payload.defaultPath || 'document.pdf',
+    filters: [{ name: 'PDF', extensions: ['pdf'] }],
+  });
+
+  if (result.canceled || !result.filePath) {
+    return { canceled: true };
+  }
+
+  const printWindow = new BrowserWindow({
+    show: false,
+    webPreferences: {
+      sandbox: true,
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  });
+
+  try {
+    await printWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(payload.html)}`);
+    const pdf = await printWindow.webContents.printToPDF({
+      printBackground: true,
+      pageSize: payload.pdfOptions?.pageSize ?? 'A4',
+      landscape: Boolean(payload.pdfOptions?.landscape),
+      margins: { marginType: payload.pdfOptions?.marginType ?? 'default' },
+    });
+    await fs.writeFile(result.filePath, pdf);
+    return { canceled: false, filePath: result.filePath, fileName: path.basename(result.filePath) };
+  } catch (error) {
+    return { canceled: true, error: error instanceof Error ? error.message : '导出失败，请检查文件路径或权限。' };
+  } finally {
+    printWindow.close();
   }
 });
 
@@ -240,6 +462,19 @@ ipcMain.handle('file:save', async (_event, payload: SavePayload) => {
     };
   } catch (error) {
     return { canceled: true, error: error instanceof Error ? error.message : '保存失败，请检查文件路径或权限。' };
+  }
+});
+
+ipcMain.handle('shell:showItemInFolder', async (_event, filePath: string) => {
+  if (!filePath || typeof filePath !== 'string') {
+    return { success: false, error: '文件路径无效。' };
+  }
+
+  try {
+    shell.showItemInFolder(filePath);
+    return { success: true };
+  } catch {
+    return { success: false, error: '无法在资源管理器中定位文件。' };
   }
 });
 

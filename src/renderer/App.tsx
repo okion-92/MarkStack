@@ -1,5 +1,6 @@
 import CodeMirror from '@uiw/react-codemirror';
 import { markdown } from '@codemirror/lang-markdown';
+import { openSearchPanel, search } from '@codemirror/search';
 import type { EditorView, ViewUpdate } from '@codemirror/view';
 import hljs from 'highlight.js';
 import {
@@ -33,10 +34,14 @@ import {
   X,
 } from 'lucide-react';
 import MarkdownIt from 'markdown-it';
+import mermaid from 'mermaid';
 import DOMPurify from 'dompurify';
-import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ClipboardEvent, type MouseEvent } from 'react';
 
 type ViewMode = 'split' | 'editor' | 'preview';
+type PdfPageSize = 'A4' | 'Letter';
+type PdfOrientation = 'portrait' | 'landscape';
+type PdfMargin = 'default' | 'none';
 
 type RecentFile = {
   filePath: string;
@@ -88,6 +93,8 @@ console.log(message);
 
 const recentStorageKey = 'markstack.recentFiles';
 const themeStorageKey = 'markstack.theme';
+const workspaceStorageKey = 'markstack.lastWorkspace';
+const draftStorageKey = 'markstack.draft';
 const droppedMarkdownPattern = /\.(?:md|markdown|mdown|mkd|txt)$/i;
 
 function slugify(value: string) {
@@ -140,6 +147,23 @@ function getInitialDarkMode() {
   return window.matchMedia('(prefers-color-scheme: dark)').matches;
 }
 
+function getLastWorkspace() {
+  return window.localStorage.getItem(workspaceStorageKey) ?? '';
+}
+
+function loadDraft() {
+  try {
+    const raw = window.localStorage.getItem(draftStorageKey);
+    return raw ? JSON.parse(raw) as { content: string; filePath?: string; fileName: string; updatedAt: number } : null;
+  } catch {
+    return null;
+  }
+}
+
+function clearDraft() {
+  window.localStorage.removeItem(draftStorageKey);
+}
+
 function escapeHtml(value: string) {
   return value
     .replace(/&/g, '&amp;')
@@ -171,8 +195,41 @@ function getDroppedFilePath(file: File) {
   return window.markstack.getPathForFile(file) || (file as File & { path?: string }).path || '';
 }
 
+function blobToDataUrl(blob: Blob) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(blob);
+  });
+}
+
 function hasDraggedFiles(event: DragEvent) {
   return Array.from(event.dataTransfer?.types ?? []).includes('Files');
+}
+
+function buildExportHtml(title: string, body: string) {
+  return `<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>${escapeHtml(title)}</title>
+  <style>
+    body { margin: 0; padding: 32px; background: #f6f7f9; color: #1f2933; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    main { max-width: 920px; margin: 0 auto; padding: 32px; background: #fff; border: 1px solid #d7dde5; border-radius: 8px; }
+    img { max-width: 100%; }
+    pre { overflow: auto; padding: 14px; background: #101828; color: #f8fafc; border-radius: 8px; }
+    code { font-family: "Cascadia Code", Consolas, monospace; }
+    blockquote { margin-left: 0; padding-left: 16px; border-left: 4px solid #2f8f83; color: #52616f; }
+    table { border-collapse: collapse; width: 100%; }
+    th, td { border: 1px solid #d7dde5; padding: 8px; }
+  </style>
+</head>
+<body>
+  <main>${body}</main>
+</body>
+</html>`;
 }
 
 function ensureUrlProtocol(value: string) {
@@ -305,7 +362,16 @@ export default function App() {
   const [mode, setMode] = useState<ViewMode>('split');
   const [darkMode, setDarkMode] = useState(getInitialDarkMode);
   const [recentFiles, setRecentFiles] = useState<RecentFile[]>(loadRecentFiles);
+  const [lastWorkspace, setLastWorkspace] = useState(getLastWorkspace);
+  const [workspaceRoot, setWorkspaceRoot] = useState('');
+  const [workspaceName, setWorkspaceName] = useState('');
+  const [workspaceFiles, setWorkspaceFiles] = useState<WorkspaceFileResult[]>([]);
+  const [workspaceSearchMatches, setWorkspaceSearchMatches] = useState<WorkspaceSearchMatch[]>([]);
+  const [workspaceSearchPending, setWorkspaceSearchPending] = useState(false);
   const [query, setQuery] = useState('');
+  const [pdfPageSize, setPdfPageSize] = useState<PdfPageSize>('A4');
+  const [pdfOrientation, setPdfOrientation] = useState<PdfOrientation>('portrait');
+  const [pdfMargin, setPdfMargin] = useState<PdfMargin>('default');
   const [status, setStatus] = useState('准备就绪');
   const previewPaneRef = useRef<HTMLElement | null>(null);
   const editorViewRef = useRef<EditorView | null>(null);
@@ -323,7 +389,7 @@ export default function App() {
   const headings = useMemo(() => extractHeadings(content), [content]);
 
   const markdownRenderer = useMemo<MarkdownIt>(() => {
-    return new MarkdownIt({
+    const renderer = new MarkdownIt({
       html: true,
       linkify: true,
       typographer: true,
@@ -341,6 +407,15 @@ export default function App() {
         return `<pre><code class="hljs">${escapeHtml(str)}</code></pre>`;
       },
     });
+    const defaultFence = renderer.renderer.rules.fence;
+    renderer.renderer.rules.fence = (tokens, index, options, env, self) => {
+      const token = tokens[index];
+      if (token.info.trim().split(/\s+/)[0]?.toLowerCase() === 'mermaid') {
+        return `<pre class="mermaid">${escapeHtml(token.content)}</pre>`;
+      }
+      return defaultFence ? defaultFence(tokens, index, options, env, self) : self.renderToken(tokens, index, options);
+    };
+    return renderer;
   }, []);
 
   const renderedHtml = useMemo(() => {
@@ -432,6 +507,44 @@ export default function App() {
   }, [content]);
 
   useEffect(() => {
+    const draft = loadDraft();
+    if (!draft?.content || draft.content === welcomeDocument) {
+      return;
+    }
+
+    if (!window.confirm(`发现未保存草稿（${draft.fileName}），是否恢复？`)) {
+      clearDraft();
+      return;
+    }
+
+    contentRef.current = draft.content;
+    editorSelectionRef.current = { from: 0, to: 0 };
+    setContent(draft.content);
+    setFilePath(draft.filePath);
+    setFileName(draft.fileName || 'untitled.md');
+    setMode('split');
+    setDirty(true);
+    setStatus('已恢复未保存草稿');
+  }, []);
+
+  useEffect(() => {
+    if (!dirty) {
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      window.localStorage.setItem(draftStorageKey, JSON.stringify({
+        content,
+        filePath,
+        fileName,
+        updatedAt: Date.now(),
+      }));
+    }, 500);
+
+    return () => window.clearTimeout(timer);
+  }, [content, dirty, fileName, filePath]);
+
+  useEffect(() => {
     const handleBeforeUnload = (event: BeforeUnloadEvent) => {
       if (!dirtyRef.current) {
         return;
@@ -457,12 +570,55 @@ export default function App() {
   useEffect(() => {
     document.documentElement.dataset.theme = darkMode ? 'dark' : 'light';
     window.localStorage.setItem(themeStorageKey, darkMode ? 'dark' : 'light');
+    mermaid.initialize({ startOnLoad: false, securityLevel: 'strict', theme: darkMode ? 'dark' : 'default' });
   }, [darkMode]);
+
+  useEffect(() => {
+    const nodes = Array.from(previewPaneRef.current?.querySelectorAll('.mermaid') ?? []);
+    if (nodes.length === 0) {
+      return;
+    }
+
+    void mermaid.run({ nodes: nodes as HTMLElement[] }).catch(() => setStatus('Mermaid 图表渲染失败'));
+  }, [darkMode, mode, renderedHtml]);
 
   useEffect(() => {
     const nextTitle = `${dirty ? '* ' : ''}${fileName} - MarkStack`;
     document.title = nextTitle;
   }, [dirty, fileName]);
+
+  useEffect(() => {
+    const searchText = query.trim();
+    if (!workspaceRoot || !searchText) {
+      setWorkspaceSearchMatches([]);
+      setWorkspaceSearchPending(false);
+      return;
+    }
+
+    let canceled = false;
+    setWorkspaceSearchPending(true);
+    const timer = window.setTimeout(() => {
+      void window.markstack.searchWorkspace({ rootPath: workspaceRoot, query: searchText }).then((result) => {
+        if (canceled) {
+          return;
+        }
+
+        if (result.success) {
+          setWorkspaceSearchMatches(result.matches);
+          setStatus(result.truncated ? '搜索结果超过 100 条，请缩小关键词' : `找到 ${result.matches.length} 条结果`);
+        } else {
+          setWorkspaceSearchMatches([]);
+          setStatus(result.error ?? '搜索失败');
+        }
+        setWorkspaceSearchPending(false);
+      });
+    }, 250);
+
+    return () => {
+      canceled = true;
+      window.clearTimeout(timer);
+    };
+  }, [query, workspaceRoot]);
 
   useEffect(() => {
     const handleDragOver = (event: DragEvent) => {
@@ -661,6 +817,24 @@ export default function App() {
     });
   }
 
+  function openEditorSearch() {
+    const view = editorViewRef.current;
+    if (view) {
+      openSearchPanel(view);
+      view.focus();
+      return;
+    }
+
+    setMode('editor');
+    window.setTimeout(() => {
+      const nextView = editorViewRef.current;
+      if (nextView) {
+        openSearchPanel(nextView);
+        nextView.focus();
+      }
+    }, 50);
+  }
+
   function insertLink() {
     const rawUrl = window.prompt('请输入链接地址', 'https://');
     if (rawUrl === null) {
@@ -684,6 +858,15 @@ export default function App() {
     });
   }
 
+  function insertImageDataUrl(dataUrl: string, alt: string, status: string) {
+    applyEditorInsert({
+      text: `\n![${alt}](${dataUrl})\n`,
+      selectionStart: 3,
+      selectionEnd: 3 + alt.length,
+      status,
+    });
+  }
+
   async function insertEmbeddedImage() {
     const result = await window.markstack.openImageFile();
     if (result.canceled) {
@@ -694,12 +877,15 @@ export default function App() {
     }
 
     const alt = fileNameWithoutExtension(result.fileName);
-    applyEditorInsert({
-      text: `\n![${alt}](${result.dataUrl})\n`,
-      selectionStart: 3,
-      selectionEnd: 3 + alt.length,
-      status: `已嵌入图片 ${result.fileName}`,
-    });
+    insertImageDataUrl(result.dataUrl, alt, `已嵌入图片 ${result.fileName}`);
+  }
+
+  async function pasteClipboardImage(file: File) {
+    try {
+      insertImageDataUrl(await blobToDataUrl(file), 'pasted-image', '已嵌入剪贴板图片');
+    } catch {
+      setStatus('剪贴板图片读取失败');
+    }
   }
 
   function applyFontSize(size: string) {
@@ -787,6 +973,61 @@ export default function App() {
     rememberFile({ filePath: result.filePath, fileName: result.fileName });
   }
 
+  function applyWorkspaceResult(result: Extract<OpenWorkspaceResult, { canceled: false }>) {
+    setWorkspaceRoot(result.rootPath);
+    setWorkspaceName(result.rootName);
+    setWorkspaceFiles(result.files);
+    setWorkspaceSearchMatches([]);
+    setLastWorkspace(result.rootPath);
+    window.localStorage.setItem(workspaceStorageKey, result.rootPath);
+    setStatus(result.truncated ? `已打开工作区 ${result.rootName}，仅显示前 1000 个文件` : `已打开工作区 ${result.rootName}`);
+  }
+
+  async function openWorkspaceFolder() {
+    const result = await window.markstack.openWorkspaceFolder();
+    if (result.canceled) {
+      if (result.error) {
+        setStatus(result.error);
+      }
+      return;
+    }
+
+    applyWorkspaceResult(result);
+  }
+
+  async function reopenLastWorkspace() {
+    if (!lastWorkspace) {
+      return;
+    }
+
+    const result = await window.markstack.openWorkspaceFolderByPath(lastWorkspace);
+    if (result.canceled) {
+      window.localStorage.removeItem(workspaceStorageKey);
+      setLastWorkspace('');
+      setStatus(result.error ?? '无法重新打开上次工作区');
+      return;
+    }
+
+    applyWorkspaceResult(result);
+  }
+
+  async function openWorkspaceFile(item: WorkspaceFileResult) {
+    if (dirty && !window.confirm('当前文档尚未保存，继续打开工作区文件？')) {
+      return;
+    }
+
+    const result = await window.markstack.openMarkdownFileByPath(item.filePath);
+    if (result.canceled) {
+      window.alert(result.error ?? '工作区文件无法打开。');
+      setWorkspaceFiles((files) => files.filter((file) => file.filePath !== item.filePath));
+      setStatus(`无法打开 ${item.fileName}`);
+      return;
+    }
+
+    replaceDocument(result.content, result.filePath, result.fileName, 'preview');
+    rememberFile({ filePath: result.filePath, fileName: result.fileName });
+  }
+
   async function openDroppedFile(nextFilePath: string) {
     const nextFileName = fileNameFromPath(nextFilePath);
     if (!droppedMarkdownPattern.test(nextFilePath)) {
@@ -849,12 +1090,47 @@ export default function App() {
       setFilePath(result.filePath);
       setFileName(result.fileName);
       setDirty(false);
+      clearDraft();
       rememberFile({ filePath: result.filePath, fileName: result.fileName });
       setStatus(`已保存 ${result.fileName}`);
     } catch {
       window.alert('保存失败，请检查文件路径或权限。');
       setStatus('保存失败');
     }
+  }
+
+  async function exportHtml() {
+    const result = await window.markstack.exportHtmlFile({
+      defaultPath: `${fileNameWithoutExtension(fileName)}.html`,
+      html: buildExportHtml(fileName, previewPaneRef.current?.innerHTML ?? renderedHtml),
+    });
+
+    if (result.canceled) {
+      if (result.error) {
+        window.alert(result.error);
+        setStatus(result.error);
+      }
+      return;
+    }
+
+    setStatus(`已导出 ${result.fileName}`);
+  }
+
+  async function exportPdf() {
+    const result = await window.markstack.exportPdfFile({
+      defaultPath: `${fileNameWithoutExtension(fileName)}.pdf`,
+      html: buildExportHtml(fileName, previewPaneRef.current?.innerHTML ?? renderedHtml),
+    });
+
+    if (result.canceled) {
+      if (result.error) {
+        window.alert(result.error);
+        setStatus(result.error);
+      }
+      return;
+    }
+
+    setStatus(`已导出 ${result.fileName}`);
   }
 
   function handleContentChange(value: string) {
@@ -878,6 +1154,16 @@ export default function App() {
     const range = viewUpdate.state.selection.main;
     editorSelectionRef.current = { from: range.from, to: range.to };
   }, []);
+
+  function handlePaste(event: ClipboardEvent<HTMLDivElement>) {
+    const imageFile = Array.from(event.clipboardData.files).find((file) => file.type.startsWith('image/'));
+    if (!imageFile) {
+      return;
+    }
+
+    event.preventDefault();
+    void pasteClipboardImage(imageFile);
+  }
 
   function handlePreviewClick(event: MouseEvent<HTMLElement>) {
     const target = event.target instanceof HTMLElement ? event.target : null;
@@ -909,6 +1195,8 @@ export default function App() {
     setStatus('已阻止在应用窗口内打开该链接');
   }
 
+  const workspaceSearchQuery = query.trim();
+
   const wordCount = useMemo(() => {
     const plain = content.replace(/data:image\/[a-z+.-]+;base64,[a-z\d+/=]+/gi, ' ').replace(/[#*_>`~\-[\]()]/g, ' ').trim();
     return plain ? plain.split(/\s+/).length : 0;
@@ -917,7 +1205,7 @@ export default function App() {
   const lineCount = useMemo(() => content.split(/\r?\n/).length, [content]);
 
   return (
-    <div className="app-shell">
+    <div className="app-shell" onPaste={handlePaste}>
       <aside className="sidebar">
         <div className="brand">
           <div className="brand-mark">M</div>
@@ -936,6 +1224,10 @@ export default function App() {
             <FolderOpen size={17} />
             打开
           </button>
+          <button type="button" onClick={() => void openWorkspaceFolder()} title="打开 Markdown 工作区">
+            <FolderOpen size={17} />
+            文件夹
+          </button>
           <button type="button" onClick={() => void saveFile()} title="保存当前文件">
             <Save size={17} />
             保存
@@ -944,6 +1236,29 @@ export default function App() {
             <FileDown size={17} />
             另存
           </button>
+          <button type="button" onClick={() => void exportHtml()} title="导出 HTML">
+            <FileDown size={17} />
+            HTML
+          </button>
+          <button type="button" onClick={() => void exportPdf()} title="导出 PDF">
+            <FileDown size={17} />
+            PDF
+          </button>
+        </div>
+
+        <div className="export-settings" aria-label="PDF 导出设置">
+          <select value={pdfPageSize} title="PDF 纸张" onChange={(event) => setPdfPageSize(event.currentTarget.value as PdfPageSize)}>
+            <option value="A4">A4</option>
+            <option value="Letter">Letter</option>
+          </select>
+          <select value={pdfOrientation} title="PDF 方向" onChange={(event) => setPdfOrientation(event.currentTarget.value as PdfOrientation)}>
+            <option value="portrait">纵向</option>
+            <option value="landscape">横向</option>
+          </select>
+          <select value={pdfMargin} title="PDF 页边距" onChange={(event) => setPdfMargin(event.currentTarget.value as PdfMargin)}>
+            <option value="default">默认边距</option>
+            <option value="none">无边距</option>
+          </select>
         </div>
 
         <div className="search-box">
@@ -951,11 +1266,58 @@ export default function App() {
           <input
             value={query}
             onChange={(event) => setQuery(event.target.value)}
-            placeholder="筛选目录"
+            placeholder="搜索目录或工作区内容"
           />
         </div>
 
-        <section className="panel">
+        <section className="panel workspace-panel">
+          <div className="panel-title">工作区{workspaceName ? ` / ${workspaceName}` : ''}</div>
+          <div className="workspace-file-list">
+            {workspaceSearchQuery && workspaceRoot ? (
+              <>
+                {workspaceSearchMatches.map((item) => (
+                  <button
+                    type="button"
+                    className={item.filePath === filePath ? 'workspace-file active' : 'workspace-file'}
+                    key={`${item.filePath}-${item.lineNumber}-${item.lineText}`}
+                    title={item.filePath}
+                    onClick={() => void openWorkspaceFile(item)}
+                  >
+                    <span>{item.fileName}</span>
+                    <small>{item.relativePath}:{item.lineNumber}</small>
+                    <small className="workspace-match-line">{item.lineText || '空行'}</small>
+                  </button>
+                ))}
+                {workspaceSearchPending && <div className="empty-state">正在搜索</div>}
+                {!workspaceSearchPending && workspaceSearchMatches.length === 0 && <div className="empty-state">未找到匹配内容</div>}
+              </>
+            ) : (
+              <>
+                {workspaceFiles.map((item) => (
+                  <button
+                    type="button"
+                    className={item.filePath === filePath ? 'workspace-file active' : 'workspace-file'}
+                    key={item.filePath}
+                    title={item.filePath}
+                    onClick={() => void openWorkspaceFile(item)}
+                  >
+                    <span>{item.fileName}</span>
+                    <small>{item.relativePath}</small>
+                  </button>
+                ))}
+                {workspaceFiles.length === 0 && (
+                  <div className="empty-state">
+                    {lastWorkspace ? (
+                      <button type="button" className="inline-action" onClick={() => void reopenLastWorkspace()}>重新打开上次工作区</button>
+                    ) : '打开文件夹后显示 Markdown 文件'}
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        </section>
+
+        <section className="panel toc-panel">
           <div className="panel-title">目录</div>
           <div className="toc-list">
             {headings
@@ -973,7 +1335,7 @@ export default function App() {
           </div>
         </section>
 
-        <section className="panel">
+        <section className="panel recent-panel">
           <div className="panel-title">最近文件</div>
           <div className="recent-list">
             {recentFiles.map((item) => (
@@ -1059,6 +1421,7 @@ export default function App() {
             <button type="button" title="行内代码" onClick={() => applyInlineFormat('`', '`', 'code', '行内代码')}><Code2 size={16} /></button>
           </div>
           <div className="toolbar-group">
+            <button type="button" title="查找替换" onClick={openEditorSearch}><Search size={16} /></button>
             <button type="button" title="插入链接" onClick={insertLink}><Link size={16} /></button>
             <button type="button" title="嵌入图片" onClick={() => void insertEmbeddedImage()}><ImagePlus size={16} /></button>
           </div>
@@ -1132,7 +1495,7 @@ export default function App() {
                 value={content}
                 height="100%"
                 maxHeight="100%"
-                extensions={[markdown()]}
+                extensions={[markdown(), search({ top: true })]}
                 theme={darkMode ? 'dark' : 'light'}
                 basicSetup={{
                   foldGutter: true,
