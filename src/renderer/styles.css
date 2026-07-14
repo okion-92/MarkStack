@@ -337,7 +337,11 @@ button:hover {
   display: flex;
   align-items: center;
   min-width: 0;
-  gap: 12px;
+  gap: 10px;
+}
+
+.file-meta-text {
+  min-width: 0;
 }
 
 .file-meta h1,
@@ -352,7 +356,6 @@ button:hover {
   display: flex;
   align-items: center;
   min-width: 0;
-  gap: 8px;
 }
 
 .file-title-row h1 {
@@ -367,10 +370,12 @@ button:hover {
 
 .file-close-button {
   display: grid;
-  width: 26px;
-  height: 26px;
+  width: 28px;
+  height: 28px;
   flex: 0 0 auto;
+  margin-left: 2px;
   place-items: center;
+  border: 1px solid transparent;
   border-radius: 7px;
   color: var(--muted);
 }

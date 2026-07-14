@@ -6,7 +6,7 @@ MarkStack 桌面端是一个 Windows 本地 Markdown 工作区应用，重点覆
 
 ## Current Version
 
-- App version: `0.1.18`
+- App version: `0.1.19`
 - Package name: `markstack-desktop`
 - Target platform: Windows desktop
 - Installer format: NSIS `.exe`
@@ -239,6 +239,11 @@ git switch dev
 ```
 
 ## Release Notes
+
+### 0.1.19
+
+- Moved the active file close button out of the title text row and aligned it with the full file metadata area.
+- Kept the close action behavior unchanged.
 
 ### 0.1.18
 
