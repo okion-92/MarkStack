@@ -52,7 +52,13 @@ type SearchWorkspaceResult =
   | { success: true; matches: WorkspaceSearchMatch[]; truncated: boolean }
   | { success: false; error?: string };
 
-type ExportHtmlResult =
+type PdfExportOptions = {
+  pageSize?: 'A4' | 'Letter';
+  landscape?: boolean;
+  marginType?: 'default' | 'none';
+};
+
+type ExportDocumentResult =
   | { canceled: true; error?: string }
   | { canceled: false; filePath: string; fileName: string };
 
@@ -66,6 +72,7 @@ interface Window {
     openMarkdownFileByPath: (filePath: string) => Promise<OpenMarkdownResult>;
     openImageFile: () => Promise<OpenImageResult>;
     openWorkspaceFolder: () => Promise<OpenWorkspaceResult>;
+    openWorkspaceFolderByPath: (rootPath: string) => Promise<OpenWorkspaceResult>;
     searchWorkspace: (payload: { rootPath: string; query: string }) => Promise<SearchWorkspaceResult>;
     saveMarkdownFile: (payload: {
       filePath?: string;
@@ -74,8 +81,14 @@ interface Window {
     exportHtmlFile: (payload: {
       defaultPath?: string;
       html: string;
-    }) => Promise<ExportHtmlResult>;
+    }) => Promise<ExportDocumentResult>;
+    exportPdfFile: (payload: {
+      defaultPath?: string;
+      html: string;
+      pdfOptions?: PdfExportOptions;
+    }) => Promise<ExportDocumentResult>;
     openExternal: (url: string) => Promise<OpenExternalResult>;
+    showItemInFolder: (filePath: string) => Promise<OpenExternalResult>;
     getPathForFile: (file: File) => string;
   };
 }

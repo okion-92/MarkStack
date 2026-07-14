@@ -29,9 +29,14 @@ type SavePayload = {
   content: string;
 };
 
-type ExportHtmlPayload = {
+type ExportDocumentPayload = {
   defaultPath?: string;
   html: string;
+  pdfOptions?: {
+    pageSize?: 'A4' | 'Letter';
+    landscape?: boolean;
+    marginType?: 'default' | 'none';
+  };
 };
 
 function isSupportedMarkdownPath(filePath: string) {
@@ -97,6 +102,24 @@ async function collectWorkspaceFiles(rootPath: string, currentPath = rootPath, f
   }
 
   return files;
+}
+
+async function openWorkspaceRoot(rootPath: string) {
+  const stats = await fs.stat(rootPath);
+  if (!stats.isDirectory()) {
+    throw new Error('工作区路径无效。');
+  }
+
+  const files = await collectWorkspaceFiles(rootPath);
+  files.sort((left, right) => left.relativePath.localeCompare(right.relativePath, 'zh-CN'));
+
+  return {
+    canceled: false,
+    rootPath,
+    rootName: path.basename(rootPath),
+    files,
+    truncated: files.length >= maxWorkspaceFiles,
+  };
 }
 
 async function searchWorkspaceFiles(rootPath: string, query: string) {
@@ -276,17 +299,23 @@ ipcMain.handle('workspace:openFolder', async () => {
     return { canceled: true };
   }
 
-  const rootPath = result.filePaths[0];
-  const files = await collectWorkspaceFiles(rootPath);
-  files.sort((left, right) => left.relativePath.localeCompare(right.relativePath, 'zh-CN'));
+  try {
+    return await openWorkspaceRoot(result.filePaths[0]);
+  } catch (error) {
+    return { canceled: true, error: error instanceof Error ? error.message : '工作区无法打开。' };
+  }
+});
 
-  return {
-    canceled: false,
-    rootPath,
-    rootName: path.basename(rootPath),
-    files,
-    truncated: files.length >= maxWorkspaceFiles,
-  };
+ipcMain.handle('workspace:openPath', async (_event, rootPath: string) => {
+  if (!rootPath || typeof rootPath !== 'string') {
+    return { canceled: true, error: '工作区路径无效。' };
+  }
+
+  try {
+    return await openWorkspaceRoot(rootPath);
+  } catch (error) {
+    return { canceled: true, error: error instanceof Error ? error.message : '工作区无法打开。' };
+  }
 });
 
 ipcMain.handle('workspace:search', async (_event, payload: { rootPath?: string; query?: string }) => {
@@ -331,7 +360,7 @@ ipcMain.handle('file:openImage', async () => {
   }
 });
 
-ipcMain.handle('file:exportHtml', async (_event, payload: ExportHtmlPayload) => {
+ipcMain.handle('file:exportHtml', async (_event, payload: ExportDocumentPayload) => {
   try {
     if (!payload || typeof payload.html !== 'string') {
       return { canceled: true, error: '导出内容无效。' };
@@ -351,6 +380,47 @@ ipcMain.handle('file:exportHtml', async (_event, payload: ExportHtmlPayload) => 
     return { canceled: false, filePath: result.filePath, fileName: path.basename(result.filePath) };
   } catch (error) {
     return { canceled: true, error: error instanceof Error ? error.message : '导出失败，请检查文件路径或权限。' };
+  }
+});
+
+ipcMain.handle('file:exportPdf', async (_event, payload: ExportDocumentPayload) => {
+  if (!payload || typeof payload.html !== 'string') {
+    return { canceled: true, error: '导出内容无效。' };
+  }
+
+  const result = await dialog.showSaveDialog({
+    title: '导出 PDF',
+    defaultPath: payload.defaultPath || 'document.pdf',
+    filters: [{ name: 'PDF', extensions: ['pdf'] }],
+  });
+
+  if (result.canceled || !result.filePath) {
+    return { canceled: true };
+  }
+
+  const printWindow = new BrowserWindow({
+    show: false,
+    webPreferences: {
+      sandbox: true,
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  });
+
+  try {
+    await printWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(payload.html)}`);
+    const pdf = await printWindow.webContents.printToPDF({
+      printBackground: true,
+      pageSize: payload.pdfOptions?.pageSize ?? 'A4',
+      landscape: Boolean(payload.pdfOptions?.landscape),
+      margins: { marginType: payload.pdfOptions?.marginType ?? 'default' },
+    });
+    await fs.writeFile(result.filePath, pdf);
+    return { canceled: false, filePath: result.filePath, fileName: path.basename(result.filePath) };
+  } catch (error) {
+    return { canceled: true, error: error instanceof Error ? error.message : '导出失败，请检查文件路径或权限。' };
+  } finally {
+    printWindow.close();
   }
 });
 
@@ -392,6 +462,19 @@ ipcMain.handle('file:save', async (_event, payload: SavePayload) => {
     };
   } catch (error) {
     return { canceled: true, error: error instanceof Error ? error.message : '保存失败，请检查文件路径或权限。' };
+  }
+});
+
+ipcMain.handle('shell:showItemInFolder', async (_event, filePath: string) => {
+  if (!filePath || typeof filePath !== 'string') {
+    return { success: false, error: '文件路径无效。' };
+  }
+
+  try {
+    shell.showItemInFolder(filePath);
+    return { success: true };
+  } catch {
+    return { success: false, error: '无法在资源管理器中定位文件。' };
   }
 });
 

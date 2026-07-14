@@ -132,6 +132,27 @@ button:hover {
   border-radius: 7px;
 }
 
+.export-settings {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.export-settings select {
+  min-width: 0;
+  height: 32px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--surface-muted);
+  color: var(--text);
+}
+
+.export-settings select:last-child {
+  grid-column: 1 / -1;
+}
+
 .search-box {
   display: flex;
   align-items: center;
@@ -278,6 +299,19 @@ button:hover {
   padding: 8px 10px;
   color: var(--muted);
   font-size: 13px;
+}
+
+.inline-action {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  text-align: left;
+}
+
+.inline-action:hover {
+  color: var(--accent-strong);
 }
 
 .workspace {
@@ -602,6 +636,18 @@ button:hover {
   padding: 14px;
   border-radius: 8px;
   background: #111827;
+}
+
+.markdown-body .mermaid {
+  display: flex;
+  justify-content: center;
+  background: transparent;
+  color: var(--text);
+}
+
+.markdown-body .mermaid svg {
+  max-width: 100%;
+  height: auto;
 }
 
 .markdown-body pre code {

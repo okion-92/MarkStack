@@ -1,5 +1,6 @@
 import CodeMirror from '@uiw/react-codemirror';
 import { markdown } from '@codemirror/lang-markdown';
+import { openSearchPanel, search } from '@codemirror/search';
 import type { EditorView, ViewUpdate } from '@codemirror/view';
 import hljs from 'highlight.js';
 import {
@@ -33,10 +34,14 @@ import {
   X,
 } from 'lucide-react';
 import MarkdownIt from 'markdown-it';
+import mermaid from 'mermaid';
 import DOMPurify from 'dompurify';
 import { useCallback, useEffect, useMemo, useRef, useState, type ClipboardEvent, type MouseEvent } from 'react';
 
 type ViewMode = 'split' | 'editor' | 'preview';
+type PdfPageSize = 'A4' | 'Letter';
+type PdfOrientation = 'portrait' | 'landscape';
+type PdfMargin = 'default' | 'none';
 
 type RecentFile = {
   filePath: string;
@@ -88,6 +93,8 @@ console.log(message);
 
 const recentStorageKey = 'markstack.recentFiles';
 const themeStorageKey = 'markstack.theme';
+const workspaceStorageKey = 'markstack.lastWorkspace';
+const draftStorageKey = 'markstack.draft';
 const droppedMarkdownPattern = /\.(?:md|markdown|mdown|mkd|txt)$/i;
 
 function slugify(value: string) {
@@ -138,6 +145,23 @@ function getInitialDarkMode() {
     return stored === 'dark';
   }
   return window.matchMedia('(prefers-color-scheme: dark)').matches;
+}
+
+function getLastWorkspace() {
+  return window.localStorage.getItem(workspaceStorageKey) ?? '';
+}
+
+function loadDraft() {
+  try {
+    const raw = window.localStorage.getItem(draftStorageKey);
+    return raw ? JSON.parse(raw) as { content: string; filePath?: string; fileName: string; updatedAt: number } : null;
+  } catch {
+    return null;
+  }
+}
+
+function clearDraft() {
+  window.localStorage.removeItem(draftStorageKey);
 }
 
 function escapeHtml(value: string) {
@@ -338,12 +362,16 @@ export default function App() {
   const [mode, setMode] = useState<ViewMode>('split');
   const [darkMode, setDarkMode] = useState(getInitialDarkMode);
   const [recentFiles, setRecentFiles] = useState<RecentFile[]>(loadRecentFiles);
+  const [lastWorkspace, setLastWorkspace] = useState(getLastWorkspace);
   const [workspaceRoot, setWorkspaceRoot] = useState('');
   const [workspaceName, setWorkspaceName] = useState('');
   const [workspaceFiles, setWorkspaceFiles] = useState<WorkspaceFileResult[]>([]);
   const [workspaceSearchMatches, setWorkspaceSearchMatches] = useState<WorkspaceSearchMatch[]>([]);
   const [workspaceSearchPending, setWorkspaceSearchPending] = useState(false);
   const [query, setQuery] = useState('');
+  const [pdfPageSize, setPdfPageSize] = useState<PdfPageSize>('A4');
+  const [pdfOrientation, setPdfOrientation] = useState<PdfOrientation>('portrait');
+  const [pdfMargin, setPdfMargin] = useState<PdfMargin>('default');
   const [status, setStatus] = useState('准备就绪');
   const previewPaneRef = useRef<HTMLElement | null>(null);
   const editorViewRef = useRef<EditorView | null>(null);
@@ -361,7 +389,7 @@ export default function App() {
   const headings = useMemo(() => extractHeadings(content), [content]);
 
   const markdownRenderer = useMemo<MarkdownIt>(() => {
-    return new MarkdownIt({
+    const renderer = new MarkdownIt({
       html: true,
       linkify: true,
       typographer: true,
@@ -379,6 +407,15 @@ export default function App() {
         return `<pre><code class="hljs">${escapeHtml(str)}</code></pre>`;
       },
     });
+    const defaultFence = renderer.renderer.rules.fence;
+    renderer.renderer.rules.fence = (tokens, index, options, env, self) => {
+      const token = tokens[index];
+      if (token.info.trim().split(/\s+/)[0]?.toLowerCase() === 'mermaid') {
+        return `<pre class="mermaid">${escapeHtml(token.content)}</pre>`;
+      }
+      return defaultFence ? defaultFence(tokens, index, options, env, self) : self.renderToken(tokens, index, options);
+    };
+    return renderer;
   }, []);
 
   const renderedHtml = useMemo(() => {
@@ -470,6 +507,44 @@ export default function App() {
   }, [content]);
 
   useEffect(() => {
+    const draft = loadDraft();
+    if (!draft?.content || draft.content === welcomeDocument) {
+      return;
+    }
+
+    if (!window.confirm(`发现未保存草稿（${draft.fileName}），是否恢复？`)) {
+      clearDraft();
+      return;
+    }
+
+    contentRef.current = draft.content;
+    editorSelectionRef.current = { from: 0, to: 0 };
+    setContent(draft.content);
+    setFilePath(draft.filePath);
+    setFileName(draft.fileName || 'untitled.md');
+    setMode('split');
+    setDirty(true);
+    setStatus('已恢复未保存草稿');
+  }, []);
+
+  useEffect(() => {
+    if (!dirty) {
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      window.localStorage.setItem(draftStorageKey, JSON.stringify({
+        content,
+        filePath,
+        fileName,
+        updatedAt: Date.now(),
+      }));
+    }, 500);
+
+    return () => window.clearTimeout(timer);
+  }, [content, dirty, fileName, filePath]);
+
+  useEffect(() => {
     const handleBeforeUnload = (event: BeforeUnloadEvent) => {
       if (!dirtyRef.current) {
         return;
@@ -495,7 +570,17 @@ export default function App() {
   useEffect(() => {
     document.documentElement.dataset.theme = darkMode ? 'dark' : 'light';
     window.localStorage.setItem(themeStorageKey, darkMode ? 'dark' : 'light');
+    mermaid.initialize({ startOnLoad: false, securityLevel: 'strict', theme: darkMode ? 'dark' : 'default' });
   }, [darkMode]);
+
+  useEffect(() => {
+    const nodes = Array.from(previewPaneRef.current?.querySelectorAll('.mermaid') ?? []);
+    if (nodes.length === 0) {
+      return;
+    }
+
+    void mermaid.run({ nodes: nodes as HTMLElement[] }).catch(() => setStatus('Mermaid 图表渲染失败'));
+  }, [darkMode, mode, renderedHtml]);
 
   useEffect(() => {
     const nextTitle = `${dirty ? '* ' : ''}${fileName} - MarkStack`;
@@ -732,6 +817,24 @@ export default function App() {
     });
   }
 
+  function openEditorSearch() {
+    const view = editorViewRef.current;
+    if (view) {
+      openSearchPanel(view);
+      view.focus();
+      return;
+    }
+
+    setMode('editor');
+    window.setTimeout(() => {
+      const nextView = editorViewRef.current;
+      if (nextView) {
+        openSearchPanel(nextView);
+        nextView.focus();
+      }
+    }, 50);
+  }
+
   function insertLink() {
     const rawUrl = window.prompt('请输入链接地址', 'https://');
     if (rawUrl === null) {
@@ -870,6 +973,16 @@ export default function App() {
     rememberFile({ filePath: result.filePath, fileName: result.fileName });
   }
 
+  function applyWorkspaceResult(result: Extract<OpenWorkspaceResult, { canceled: false }>) {
+    setWorkspaceRoot(result.rootPath);
+    setWorkspaceName(result.rootName);
+    setWorkspaceFiles(result.files);
+    setWorkspaceSearchMatches([]);
+    setLastWorkspace(result.rootPath);
+    window.localStorage.setItem(workspaceStorageKey, result.rootPath);
+    setStatus(result.truncated ? `已打开工作区 ${result.rootName}，仅显示前 1000 个文件` : `已打开工作区 ${result.rootName}`);
+  }
+
   async function openWorkspaceFolder() {
     const result = await window.markstack.openWorkspaceFolder();
     if (result.canceled) {
@@ -879,11 +992,23 @@ export default function App() {
       return;
     }
 
-    setWorkspaceRoot(result.rootPath);
-    setWorkspaceName(result.rootName);
-    setWorkspaceFiles(result.files);
-    setWorkspaceSearchMatches([]);
-    setStatus(result.truncated ? `已打开工作区 ${result.rootName}，仅显示前 1000 个文件` : `已打开工作区 ${result.rootName}`);
+    applyWorkspaceResult(result);
+  }
+
+  async function reopenLastWorkspace() {
+    if (!lastWorkspace) {
+      return;
+    }
+
+    const result = await window.markstack.openWorkspaceFolderByPath(lastWorkspace);
+    if (result.canceled) {
+      window.localStorage.removeItem(workspaceStorageKey);
+      setLastWorkspace('');
+      setStatus(result.error ?? '无法重新打开上次工作区');
+      return;
+    }
+
+    applyWorkspaceResult(result);
   }
 
   async function openWorkspaceFile(item: WorkspaceFileResult) {
@@ -965,6 +1090,7 @@ export default function App() {
       setFilePath(result.filePath);
       setFileName(result.fileName);
       setDirty(false);
+      clearDraft();
       rememberFile({ filePath: result.filePath, fileName: result.fileName });
       setStatus(`已保存 ${result.fileName}`);
     } catch {
@@ -976,7 +1102,24 @@ export default function App() {
   async function exportHtml() {
     const result = await window.markstack.exportHtmlFile({
       defaultPath: `${fileNameWithoutExtension(fileName)}.html`,
-      html: buildExportHtml(fileName, renderedHtml),
+      html: buildExportHtml(fileName, previewPaneRef.current?.innerHTML ?? renderedHtml),
+    });
+
+    if (result.canceled) {
+      if (result.error) {
+        window.alert(result.error);
+        setStatus(result.error);
+      }
+      return;
+    }
+
+    setStatus(`已导出 ${result.fileName}`);
+  }
+
+  async function exportPdf() {
+    const result = await window.markstack.exportPdfFile({
+      defaultPath: `${fileNameWithoutExtension(fileName)}.pdf`,
+      html: buildExportHtml(fileName, previewPaneRef.current?.innerHTML ?? renderedHtml),
     });
 
     if (result.canceled) {
@@ -1097,6 +1240,25 @@ export default function App() {
             <FileDown size={17} />
             HTML
           </button>
+          <button type="button" onClick={() => void exportPdf()} title="导出 PDF">
+            <FileDown size={17} />
+            PDF
+          </button>
+        </div>
+
+        <div className="export-settings" aria-label="PDF 导出设置">
+          <select value={pdfPageSize} title="PDF 纸张" onChange={(event) => setPdfPageSize(event.currentTarget.value as PdfPageSize)}>
+            <option value="A4">A4</option>
+            <option value="Letter">Letter</option>
+          </select>
+          <select value={pdfOrientation} title="PDF 方向" onChange={(event) => setPdfOrientation(event.currentTarget.value as PdfOrientation)}>
+            <option value="portrait">纵向</option>
+            <option value="landscape">横向</option>
+          </select>
+          <select value={pdfMargin} title="PDF 页边距" onChange={(event) => setPdfMargin(event.currentTarget.value as PdfMargin)}>
+            <option value="default">默认边距</option>
+            <option value="none">无边距</option>
+          </select>
         </div>
 
         <div className="search-box">
@@ -1143,7 +1305,13 @@ export default function App() {
                     <small>{item.relativePath}</small>
                   </button>
                 ))}
-                {workspaceFiles.length === 0 && <div className="empty-state">打开文件夹后显示 Markdown 文件</div>}
+                {workspaceFiles.length === 0 && (
+                  <div className="empty-state">
+                    {lastWorkspace ? (
+                      <button type="button" className="inline-action" onClick={() => void reopenLastWorkspace()}>重新打开上次工作区</button>
+                    ) : '打开文件夹后显示 Markdown 文件'}
+                  </div>
+                )}
               </>
             )}
           </div>
@@ -1253,6 +1421,7 @@ export default function App() {
             <button type="button" title="行内代码" onClick={() => applyInlineFormat('`', '`', 'code', '行内代码')}><Code2 size={16} /></button>
           </div>
           <div className="toolbar-group">
+            <button type="button" title="查找替换" onClick={openEditorSearch}><Search size={16} /></button>
             <button type="button" title="插入链接" onClick={insertLink}><Link size={16} /></button>
             <button type="button" title="嵌入图片" onClick={() => void insertEmbeddedImage()}><ImagePlus size={16} /></button>
           </div>
@@ -1326,7 +1495,7 @@ export default function App() {
                 value={content}
                 height="100%"
                 maxHeight="100%"
-                extensions={[markdown()]}
+                extensions={[markdown(), search({ top: true })]}
                 theme={darkMode ? 'dark' : 'light'}
                 basicSetup={{
                   foldGutter: true,
