@@ -1,6 +1,6 @@
 {
   "name": "markstack-desktop",
-  "version": "0.1.17",
+  "version": "0.1.18",
   "description": "MarkStack desktop Markdown editor and previewer.",
   "author": "MarkStack",
   "license": "MIT",
@@ -36,9 +36,9 @@
     "@vitejs/plugin-react": "^4.3.4",
     "concurrently": "^9.1.0",
     "cross-env": "^7.0.3",
-    "electron": "^33.2.1",
-    "electron-builder": "^25.1.8",
-    "esbuild": "^0.24.0",
+    "electron": "^43.1.0",
+    "electron-builder": "^26.15.3",
+    "esbuild": "^0.28.1",
     "typescript": "^5.7.2",
     "vite": "^6.0.3",
     "wait-on": "^8.0.1"
