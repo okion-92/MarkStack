@@ -341,7 +341,11 @@ button:hover {
 }
 
 .file-meta-text {
+  display: flex;
+  max-width: 56vw;
   min-width: 0;
+  flex-direction: column;
+  align-items: flex-start;
 }
 
 .file-meta h1,
@@ -353,13 +357,15 @@ button:hover {
 }
 
 .file-title-row {
-  display: flex;
+  display: inline-flex;
+  max-width: 100%;
   align-items: center;
-  min-width: 0;
+  gap: 6px;
 }
 
 .file-title-row h1 {
-  flex: 1 1 auto;
+  min-width: 0;
+  flex: 0 1 auto;
 }
 
 .file-meta h1 {
@@ -373,7 +379,6 @@ button:hover {
   width: 28px;
   height: 28px;
   flex: 0 0 auto;
-  margin-left: 2px;
   place-items: center;
   border: 1px solid transparent;
   border-radius: 7px;
@@ -387,7 +392,7 @@ button:hover {
 }
 
 .file-meta p {
-  max-width: 56vw;
+  max-width: 100%;
   margin-top: 3px;
   color: var(--muted);
   font-size: 12px;
