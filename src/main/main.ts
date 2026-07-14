@@ -43,6 +43,14 @@ function isSupportedMarkdownPath(filePath: string) {
   return markdownExtensions.has(path.extname(filePath).toLowerCase());
 }
 
+function normalizePdfOptions(options: ExportDocumentPayload['pdfOptions']) {
+  return {
+    pageSize: options?.pageSize === 'Letter' ? 'Letter' : 'A4',
+    landscape: Boolean(options?.landscape),
+    marginType: options?.marginType === 'none' ? 'none' : 'default',
+  } as const;
+}
+
 function getSafeExternalUrl(url: string) {
   if (!url || typeof url !== 'string') {
     return null;
@@ -404,16 +412,18 @@ ipcMain.handle('file:exportPdf', async (_event, payload: ExportDocumentPayload) 
       sandbox: true,
       contextIsolation: true,
       nodeIntegration: false,
+      javascript: false,
     },
   });
 
   try {
+    const pdfOptions = normalizePdfOptions(payload.pdfOptions);
     await printWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(payload.html)}`);
     const pdf = await printWindow.webContents.printToPDF({
       printBackground: true,
-      pageSize: payload.pdfOptions?.pageSize ?? 'A4',
-      landscape: Boolean(payload.pdfOptions?.landscape),
-      margins: { marginType: payload.pdfOptions?.marginType ?? 'default' },
+      pageSize: pdfOptions.pageSize,
+      landscape: pdfOptions.landscape,
+      margins: { marginType: pdfOptions.marginType },
     });
     await fs.writeFile(result.filePath, pdf);
     return { canceled: false, filePath: result.filePath, fileName: path.basename(result.filePath) };

@@ -232,6 +232,14 @@ function buildExportHtml(title: string, body: string) {
 </html>`;
 }
 
+function sanitizePreviewHtml(value: string) {
+  return DOMPurify.sanitize(value, {
+    ADD_ATTR: ['style'],
+    ADD_DATA_URI_TAGS: ['img'],
+    FORBID_TAGS: ['script', 'iframe', 'object', 'embed', 'form', 'input', 'button', 'textarea', 'select', 'meta', 'base', 'link'],
+  });
+}
+
 function ensureUrlProtocol(value: string) {
   const trimmed = value.trim();
   if (!trimmed || /^([a-z][a-z\d+.-]*:|#)/i.test(trimmed)) {
@@ -426,11 +434,7 @@ export default function App() {
       return `<h${level} id="${makeUniqueHeadingId(plain, usedIds)}">${text}</h${level}>`;
     });
 
-    return DOMPurify.sanitize(htmlWithHeadingIds, {
-      ADD_ATTR: ['style'],
-      ADD_DATA_URI_TAGS: ['img'],
-      FORBID_TAGS: ['script', 'iframe', 'object', 'embed', 'form', 'input', 'button', 'textarea', 'select', 'meta', 'base', 'link'],
-    });
+    return sanitizePreviewHtml(htmlWithHeadingIds);
   }, [content, markdownRenderer]);
 
   const clearSyncSource = useCallback(() => {
@@ -1100,9 +1104,10 @@ export default function App() {
   }
 
   async function exportHtml() {
+    const bodyHtml = sanitizePreviewHtml(previewPaneRef.current?.innerHTML ?? renderedHtml);
     const result = await window.markstack.exportHtmlFile({
       defaultPath: `${fileNameWithoutExtension(fileName)}.html`,
-      html: buildExportHtml(fileName, previewPaneRef.current?.innerHTML ?? renderedHtml),
+      html: buildExportHtml(fileName, bodyHtml),
     });
 
     if (result.canceled) {
@@ -1117,9 +1122,15 @@ export default function App() {
   }
 
   async function exportPdf() {
+    const bodyHtml = sanitizePreviewHtml(previewPaneRef.current?.innerHTML ?? renderedHtml);
     const result = await window.markstack.exportPdfFile({
       defaultPath: `${fileNameWithoutExtension(fileName)}.pdf`,
-      html: buildExportHtml(fileName, previewPaneRef.current?.innerHTML ?? renderedHtml),
+      html: buildExportHtml(fileName, bodyHtml),
+      pdfOptions: {
+        pageSize: pdfPageSize,
+        landscape: pdfOrientation === 'landscape',
+        marginType: pdfMargin,
+      },
     });
 
     if (result.canceled) {
