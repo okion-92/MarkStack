@@ -1370,17 +1370,17 @@ export default function App() {
         <header className="topbar">
           <div className="file-meta">
             <span className={dirty ? 'dirty-dot active' : 'dirty-dot'} />
-            <div>
+            <div className="file-meta-text">
               <div className="file-title-row">
                 <h1>{fileName}</h1>
-                {filePath && (
-                  <button type="button" className="file-close-button" onClick={closeFile} title="关闭当前文件">
-                    <X size={15} />
-                  </button>
-                )}
               </div>
               <p>{filePath ?? '尚未保存到本地文件'}</p>
             </div>
+            {filePath && (
+              <button type="button" className="file-close-button" onClick={closeFile} title="关闭当前文件">
+                <X size={15} />
+              </button>
+            )}
           </div>
 
           <div className="view-controls" aria-label="视图切换">
